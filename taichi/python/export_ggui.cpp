@@ -19,6 +19,7 @@ namespace py = pybind11;
 #include "taichi/ui/backends/vulkan/canvas.h"
 #include "taichi/ui/backends/vulkan/scene.h"
 #include "taichi/rhi/vulkan/vulkan_loader.h"
+#include "taichi/rhi/arch.h"
 #include "taichi/ui/common/field_info.h"
 #include "taichi/ui/common/gui_base.h"
 #include "taichi/program/ndarray.h"
@@ -140,11 +141,20 @@ struct PyScene {
              FieldInfo indices,
              bool has_per_vertex_color,
              py::tuple color_,
-             float width) {
+             float width,
+             float draw_index_count,
+             float draw_first_index,
+             float draw_vertex_count,
+             float draw_first_vertex) {
     RenderableInfo renderable_info;
     renderable_info.vbo = vbo;
     renderable_info.indices = indices;
     renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.has_user_customized_draw = true;
+    renderable_info.draw_index_count = (int)draw_index_count;
+    renderable_info.draw_first_index = (int)draw_first_index;
+    renderable_info.draw_vertex_count = (int)draw_vertex_count;
+    renderable_info.draw_first_vertex = (int)draw_first_vertex;
 
     SceneLinesInfo info;
     info.renderable_info = renderable_info;
@@ -200,6 +210,41 @@ struct PyScene {
     info.radius = radius;
 
     scene->particles(info);
+  }
+
+  void mesh_instance(FieldInfo vbo,
+                     bool has_per_vertex_color,
+                     FieldInfo indices,
+                     py::tuple color,
+                     bool two_sided,
+                     FieldInfo transforms,
+                     float draw_first_instance,
+                     float draw_index_count,
+                     float draw_first_index,
+                     float draw_vertex_count,
+                     float draw_first_vertex) {
+    RenderableInfo renderable_info;
+    renderable_info.vbo = vbo;
+    renderable_info.has_per_vertex_color = has_per_vertex_color;
+    renderable_info.indices = indices;
+    renderable_info.has_user_customized_draw = true;
+    renderable_info.draw_index_count = (int)draw_index_count;
+    renderable_info.draw_first_index = (int)draw_first_index;
+    renderable_info.draw_vertex_count = (int)draw_vertex_count;
+    renderable_info.draw_first_vertex = (int)draw_first_vertex;
+
+    MeshInfo info;
+    info.renderable_info = renderable_info;
+    info.color = tuple_to_vec3(color);
+    info.two_sided = two_sided;
+    if (transforms.valid) {
+      info.num_instances = transforms.shape[0];
+      info.start_instance = (int)draw_first_instance;
+    }
+    info.mesh_attribute_info.mesh_attribute = transforms;
+    info.mesh_attribute_info.has_attribute = transforms.valid;
+
+    scene->mesh(info);
   }
 
   void point_light(py::tuple pos_, py::tuple color_) {
@@ -300,6 +345,11 @@ struct PyWindow {
                         vsync,   show_window,        package_path,
                         ti_arch, is_packed_mode};
     // todo: support other ggui backends
+    if (!(taichi::arch_is_cpu(ti_arch) || ti_arch == Arch::vulkan ||
+          ti_arch == Arch::cuda)) {
+      throw std::runtime_error(
+          "GGUI is only supported on cpu, vulkan and cuda backends");
+    }
     if (!lang::vulkan::is_vulkan_api_available()) {
       throw std::runtime_error("Vulkan must be available for GGUI");
     }
@@ -454,6 +504,7 @@ void export_ggui(py::module &m) {
       .def("lines", &PyScene::lines)
       .def("mesh", &PyScene::mesh)
       .def("particles", &PyScene::particles)
+      .def("mesh_instance", &PyScene::mesh_instance)
       .def("point_light", &PyScene::point_light)
       .def("ambient_light", &PyScene::ambient_light);
 
