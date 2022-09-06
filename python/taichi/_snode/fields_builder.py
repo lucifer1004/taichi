@@ -120,6 +120,12 @@ class FieldsBuilder:
         self.empty = False
         self.root.lazy_grad()
 
+    def _allocate_adjoint_checkbit(self):
+        """Same as :func:`taichi.lang.snode.SNode._allocate_adjoint_checkbit`"""
+        self._check_not_finalized()
+        self.empty = False
+        self.root._allocate_adjoint_checkbit()
+
     def lazy_dual(self):
         """Same as :func:`taichi.lang.snode.SNode.lazy_dual`"""
         # TODO: This complicates the implementation. Figure out why we need this

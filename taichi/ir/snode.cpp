@@ -283,12 +283,56 @@ bool SNode::need_activation() const {
          type == SNodeType::bitmasked || type == SNodeType::dynamic;
 }
 
+void SNode::lazy_grad() {
+  make_lazy_place(
+      this, snode_to_glb_var_exprs_,
+      [this](std::unique_ptr<SNode> &c, std::vector<Expr> &new_grads) {
+        if (c->type == SNodeType::place && c->is_primal() && is_real(c->dt) &&
+            !c->has_adjoint()) {
+          new_grads.push_back(snode_to_glb_var_exprs_->at(c.get())->adjoint);
+        }
+      });
+}
+
+void SNode::lazy_dual() {
+  make_lazy_place(
+      this, snode_to_glb_var_exprs_,
+      [this](std::unique_ptr<SNode> &c, std::vector<Expr> &new_duals) {
+        if (c->type == SNodeType::place && c->is_primal() && is_real(c->dt) &&
+            !c->has_dual()) {
+          new_duals.push_back(snode_to_glb_var_exprs_->at(c.get())->dual);
+        }
+      });
+}
+
+void SNode::allocate_adjoint_checkbit() {
+  make_lazy_place(
+      this, snode_to_glb_var_exprs_,
+      [this](std::unique_ptr<SNode> &c,
+             std::vector<Expr> &new_adjoint_checkbits) {
+        if (c->type == SNodeType::place && c->is_primal() && is_real(c->dt) &&
+            c->has_adjoint()) {
+          new_adjoint_checkbits.push_back(
+              snode_to_glb_var_exprs_->at(c.get())->adjoint_checkbit);
+        }
+      });
+}
+
 bool SNode::is_primal() const {
   return grad_info && grad_info->is_primal();
 }
 
+SNodeGradType SNode::get_snode_grad_type() const {
+  TI_ASSERT(grad_info);
+  return grad_info->get_snode_grad_type();
+}
+
 bool SNode::has_adjoint() const {
   return is_primal() && (grad_info->adjoint_snode() != nullptr);
+}
+
+bool SNode::has_adjoint_checkbit() const {
+  return is_primal() && (grad_info->adjoint_checkbit_snode() != nullptr);
 }
 
 bool SNode::has_dual() const {
@@ -298,6 +342,11 @@ bool SNode::has_dual() const {
 SNode *SNode::get_adjoint() const {
   TI_ASSERT(has_adjoint());
   return grad_info->adjoint_snode();
+}
+
+SNode *SNode::get_adjoint_checkbit() const {
+  // TI_ASSERT(has_adjoint());
+  return grad_info->adjoint_checkbit_snode();
 }
 
 SNode *SNode::get_dual() const {

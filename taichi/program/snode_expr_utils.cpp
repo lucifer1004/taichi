@@ -13,7 +13,11 @@ class GradInfoImpl final : public SNode::GradInfoProvider {
   }
 
   bool is_primal() const override {
-    return glb_var_->is_primal;
+    return glb_var_->snode_grad_type == SNodeGradType::kPrimal;
+  }
+
+  SNodeGradType get_snode_grad_type() const override {
+    return glb_var_->snode_grad_type;
   }
 
   SNode *adjoint_snode() const override {
@@ -30,6 +34,14 @@ class GradInfoImpl final : public SNode::GradInfoProvider {
       return nullptr;
     }
     return dual.snode();
+  }
+
+  SNode *adjoint_checkbit_snode() const override {
+    auto &adjoint_checkbit = glb_var_->adjoint_checkbit;
+    if (adjoint_checkbit.expr == nullptr) {
+      return nullptr;
+    }
+    return adjoint_checkbit.snode();
   }
 
  private:
@@ -73,31 +85,20 @@ void place_child(Expr *expr_arg,
   }
 }
 
-void make_lazy_grad(SNode *snode,
-                    SNodeGlobalVarExprMap *snode_to_exprs,
-                    bool is_adjoint,
-                    bool is_dual) {
+void make_lazy_place(SNode *snode,
+                     SNodeGlobalVarExprMap *snode_to_exprs,
+                     const std::function<void(std::unique_ptr<SNode> &,
+                                              std::vector<Expr> &)> &collect) {
   if (snode->type == SNodeType::place)
     return;
   for (auto &c : snode->ch) {
-    make_lazy_grad(c.get(), snode_to_exprs, is_adjoint, is_dual);
+    make_lazy_place(c.get(), snode_to_exprs, collect);
   }
-  std::vector<Expr> new_grads;
+  std::vector<Expr> new_places;
   for (auto &c : snode->ch) {
-    if (is_adjoint) {
-      if (c->type == SNodeType::place && c->is_primal() && is_real(c->dt) &&
-          !c->has_adjoint()) {
-        new_grads.push_back(snode_to_exprs->at(c.get())->adjoint);
-      }
-    }
-    if (is_dual) {
-      if (c->type == SNodeType::place && c->is_primal() && is_real(c->dt) &&
-          !c->has_dual()) {
-        new_grads.push_back(snode_to_exprs->at(c.get())->dual);
-      }
-    }
+    collect(c, new_places);
   }
-  for (auto p : new_grads) {
+  for (auto p : new_places) {
     place_child(&p, /*offset=*/{}, -1, snode, snode_to_exprs);
   }
 }

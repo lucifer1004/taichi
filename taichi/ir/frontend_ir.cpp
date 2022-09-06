@@ -242,7 +242,7 @@ void BinaryOpExpression::flatten(FlattenContext *ctx) {
   if (binary_is_logical(type)) {
     auto result = ctx->push_back<AllocaStmt>(ret_type);
     ctx->push_back<LocalStoreStmt>(result, lhs->stmt);
-    auto cond = ctx->push_back<LocalLoadStmt>(LocalAddress(result, 0));
+    auto cond = ctx->push_back<LocalLoadStmt>(result);
     auto if_stmt = ctx->push_back<IfStmt>(cond);
 
     FlattenContext rctx;
@@ -262,7 +262,7 @@ void BinaryOpExpression::flatten(FlattenContext *ctx) {
     }
     if_stmt->set_false_statements(std::move(false_block));
 
-    auto ret = ctx->push_back<LocalLoadStmt>(LocalAddress(result, 0));
+    auto ret = ctx->push_back<LocalLoadStmt>(result);
     ret->tb = tb;
     stmt = ret;
     return;
@@ -300,7 +300,7 @@ void make_ifte(Expression::FlattenContext *ctx,
   false_block->set_statements(std::move(rctx.stmts));
   if_stmt->set_false_statements(std::move(false_block));
 
-  ctx->push_back<LocalLoadStmt>(LocalAddress(result, 0));
+  ctx->push_back<LocalLoadStmt>(result);
   return;
 }
 
@@ -358,18 +358,30 @@ void InternalFuncCallExpression::flatten(FlattenContext *ctx) {
   ctx->push_back<InternalFuncStmt>(func_name, args_stmts, nullptr,
                                    with_runtime_context);
   stmt = ctx->back_stmt();
+  stmt->tb = tb;
 }
 
 void ExternalTensorExpression::flatten(FlattenContext *ctx) {
-  auto ptr = Stmt::make<ArgLoadStmt>(arg_id, dt, /*is_ptr=*/true);
+  // https://github.com/taichi-dev/taichi/issues/5819
+  // ArgLoadStmt keeps primitive types since all matrix-type gets
+  // scalarized at python-scope
+  //
+  // FIXME(zhanlue): ArgLoadStmt should use TensorType once real_matrix is
+  // turned-on by default.
+  //                 The scalarization should happen after
+  //                 irpass::lower_access()
+  auto prim_dt = dt.get_element_type();
+
+  auto ptr = Stmt::make<ArgLoadStmt>(arg_id, prim_dt, /*is_ptr=*/true);
+  ptr->tb = tb;
   ctx->push_back(std::move(ptr));
   stmt = ctx->back_stmt();
 }
 
 void GlobalVariableExpression::flatten(FlattenContext *ctx) {
   TI_ASSERT(snode->num_active_indices == 0);
-  auto ptr = Stmt::make<GlobalPtrStmt>(LaneAttribute<SNode *>(snode),
-                                       std::vector<Stmt *>());
+  auto ptr = Stmt::make<GlobalPtrStmt>(snode, std::vector<Stmt *>());
+  ptr->tb = tb;
   ctx->push_back(std::move(ptr));
 }
 
@@ -403,7 +415,7 @@ Stmt *make_ndarray_access(Expression::FlattenContext *ctx,
   flatten_lvalue(var, ctx);
   auto expr = var.cast<ExternalTensorExpression>();
   return ctx->push_back(std::make_unique<ExternalPtrStmt>(
-      expr->stmt, index_stmts, expr->element_shape, expr->element_dim));
+      expr->stmt, index_stmts, expr->dt.get_shape(), expr->element_dim));
 }
 
 Stmt *make_tensor_access(Expression::FlattenContext *ctx,
@@ -429,6 +441,26 @@ Stmt *make_tensor_access(Expression::FlattenContext *ctx,
   return ctx->push_back<PtrOffsetStmt>(var->stmt, offset_stmt);
 }
 
+void MatrixExpression::type_check(CompileConfig *config) {
+  // TODO: typecheck matrix
+  for (auto &arg : elements) {
+    TI_ASSERT_TYPE_CHECKED(arg);
+  }
+  ret_type = dt;
+}
+
+void MatrixExpression::flatten(FlattenContext *ctx) {
+  // TODO: implement flatten
+  TI_ASSERT(this->dt->is<TensorType>());
+  std::vector<Stmt *> values;
+  for (auto &elt : elements) {
+    flatten_rvalue(elt, ctx);
+    values.push_back(elt->stmt);
+  }
+  stmt = ctx->push_back<MatrixInitStmt>(values);
+  stmt->ret_type = this->dt;
+}
+
 bool IndexExpression::is_field() const {
   return var.is<GlobalVariableExpression>();
 }
@@ -438,15 +470,16 @@ bool IndexExpression::is_ndarray() const {
 }
 
 bool IndexExpression::is_tensor() const {
-  return var->ret_type->is<TensorType>();
+  return is_local() && var->ret_type->is<TensorType>();
 }
 
 bool IndexExpression::is_local() const {
-  return is_tensor();
+  return !is_global();
 }
 
 bool IndexExpression::is_global() const {
-  return !is_local();
+  // Only Ndarray and Field comes outside from a kernel
+  return is_field() || is_ndarray();
 }
 
 void IndexExpression::type_check(CompileConfig *) {
@@ -455,12 +488,23 @@ void IndexExpression::type_check(CompileConfig *) {
   if (is_field()) {  // field
     ret_type = var.cast<GlobalVariableExpression>()->dt->get_compute_type();
   } else if (is_ndarray()) {  // ndarray
-    ret_type = var.cast<ExternalTensorExpression>()->dt;
+    auto external_tensor_expr = var.cast<ExternalTensorExpression>();
+    int total_dim = external_tensor_expr->dim;
+    int index_dim = indices.exprs.size();
+
+    if (index_dim == total_dim) {
+      // Access all the way to a single element
+      ret_type = var.cast<ExternalTensorExpression>()->dt.get_element_type();
+    } else {
+      // Access to a Tensor
+      ret_type = var.cast<ExternalTensorExpression>()->dt;
+    }
   } else if (is_tensor()) {  // local tensor
     ret_type = var->ret_type->cast<TensorType>()->get_element_type();
   } else {
     throw TaichiTypeError(
-        "Invalid IndexExpression: the source is neither a field nor a tensor");
+        "Invalid IndexExpression: the source is not among field, ndarray or "
+        "local tensor");
   }
 
   for (int i = 0; i < indices.exprs.size(); i++) {
@@ -482,7 +526,12 @@ void IndexExpression::flatten(FlattenContext *ctx) {
   } else if (is_tensor()) {
     stmt = make_tensor_access(
         ctx, var, indices, var->ret_type->cast<TensorType>()->get_shape(), 1);
+  } else {
+    throw TaichiTypeError(
+        "Invalid IndexExpression: the source is not among field, ndarray or "
+        "local tensor");
   }
+  stmt->tb = tb;
 }
 
 void StrideExpression::type_check(CompileConfig *) {
@@ -603,6 +652,7 @@ void SNodeOpExpression::flatten(FlattenContext *ctx) {
     indices_stmt.push_back(indices[i]->stmt);
   }
   auto ptr = ctx->push_back<GlobalPtrStmt>(snode, indices_stmt);
+  ptr->tb = tb;
   if (op_type == SNodeOpType::is_active) {
     TI_ERROR_IF(snode->type != SNodeType::pointer &&
                     snode->type != SNodeType::hash &&
@@ -835,22 +885,27 @@ void ASTBuilder::stop_gradient(SNode *snode) {
   stack_.back()->stop_gradients.push_back(snode);
 }
 
-void ASTBuilder::insert_assignment(Expr &lhs, const Expr &rhs) {
+void ASTBuilder::insert_assignment(Expr &lhs,
+                                   const Expr &rhs,
+                                   const std::string &tb) {
   // Inside a kernel or a function
   // Create an assignment in the IR
   if (lhs.expr == nullptr) {
     lhs.set(rhs);
   } else if (lhs.expr->is_lvalue()) {
-    this->insert(std::make_unique<FrontendAssignStmt>(lhs, rhs));
+    auto stmt = std::make_unique<FrontendAssignStmt>(lhs, rhs);
+    stmt->tb = tb;
+    this->insert(std::move(stmt));
+
   } else {
     TI_ERROR("Cannot assign to non-lvalue: {}",
              ExpressionHumanFriendlyPrinter::expr_to_string(lhs));
   }
 }
 
-Expr ASTBuilder::make_var(const Expr &x) {
+Expr ASTBuilder::make_var(const Expr &x, std::string tb) {
   auto var = this->expr_alloca();
-  this->insert_assignment(var, x);
+  this->insert_assignment(var, x, tb);
   return var;
 }
 
@@ -960,9 +1015,16 @@ Expr ASTBuilder::expr_alloca() {
   return var;
 }
 
+Expr ASTBuilder::make_matrix_expr(const std::vector<int> &shape,
+                                  const DataType &dt,
+                                  const std::vector<Expr> &elements) {
+  return Expr(std::make_shared<MatrixExpression>(elements, shape, dt));
+}
+
 Expr ASTBuilder::expr_alloca_local_tensor(const std::vector<int> &shape,
                                           const DataType &element_type,
-                                          const ExprGroup &elements) {
+                                          const ExprGroup &elements,
+                                          std::string tb) {
   auto var = Expr(std::make_shared<IdExpression>(get_next_id()));
   this->insert(std::make_unique<FrontendAllocaStmt>(
       std::static_pointer_cast<IdExpression>(var.expr)->id, shape,
@@ -980,7 +1042,7 @@ Expr ASTBuilder::expr_alloca_local_tensor(const std::vector<int> &shape,
     for (int d = 0; d < (int)shape.size(); ++d)
       indices.push_back(reversed_indices[(int)shape.size() - 1 - d]);
     this->insert(std::make_unique<FrontendAssignStmt>(
-        Expr::make<IndexExpression>(var, indices), elements.exprs[i]));
+        Expr::make<IndexExpression>(var, indices, tb), elements.exprs[i]));
   }
   return var;
 }
@@ -1117,7 +1179,7 @@ void flatten_global_load(Expr ptr, Expression::FlattenContext *ctx) {
 }
 
 void flatten_local_load(Expr ptr, Expression::FlattenContext *ctx) {
-  ctx->push_back<LocalLoadStmt>(LocalAddress(ptr->stmt, 0));
+  ctx->push_back<LocalLoadStmt>(ptr->stmt);
   ptr->stmt = ctx->back_stmt();
 }
 

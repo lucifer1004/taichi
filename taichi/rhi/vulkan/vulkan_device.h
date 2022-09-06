@@ -496,6 +496,9 @@ class VulkanSurface : public Surface {
 
   uint32_t image_index_{0};
 
+  uint32_t width_{0};
+  uint32_t height_{0};
+
   std::vector<DeviceAllocation> swapchain_images_;
 
   // DeviceAllocation screenshot_image_{kDeviceNullAllocation};
@@ -652,7 +655,7 @@ class TI_DLL_EXPORT VulkanDevice : public GraphicsDevice {
 
   DeviceAllocation import_vk_image(vkapi::IVkImage image,
                                    vkapi::IVkImageView view,
-                                   VkFormat format);
+                                   VkImageLayout layout);
 
   vkapi::IVkImageView get_vk_imageview(const DeviceAllocation &alloc) const;
 
@@ -709,7 +712,6 @@ class TI_DLL_EXPORT VulkanDevice : public GraphicsDevice {
     vkapi::IVkImage image;
     vkapi::IVkImageView view;
     std::vector<vkapi::IVkImageView> view_lods;
-    VkFormat format;
   };
 
   unordered_map<uint32_t, ImageAllocInternal> image_allocations_;

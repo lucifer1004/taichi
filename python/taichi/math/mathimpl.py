@@ -10,80 +10,55 @@ from taichi.lang.ops import (acos, asin, atan2, ceil, cos, exp, floor, log,
 
 import taichi as ti
 
-_get_uint_ip = lambda: ti.u32 if impl.get_runtime(
-).default_ip == ti.i32 else ti.u64
+cfg = impl.default_cfg
 
+vec2 = ti.types.vector(2, cfg().default_fp)
+"""2D floating vector type.
+"""
 
-def vec2(*args):
-    """2D floating vector type.
-    """
-    return ti.types.vector(2, float)(*args)  # pylint: disable=E1101
+vec3 = ti.types.vector(3, cfg().default_fp)
+"""3D floating vector type.
+"""
 
+vec4 = ti.types.vector(4, cfg().default_fp)
+"""4D floating vector type.
+"""
 
-def vec3(*args):
-    """3D floating vector type.
-    """
-    return ti.types.vector(3, float)(*args)  # pylint: disable=E1101
+ivec2 = ti.types.vector(2, cfg().default_ip)
+"""2D signed int vector type.
+"""
 
+ivec3 = ti.types.vector(3, cfg().default_ip)
+"""3D signed int vector type.
+"""
 
-def vec4(*args):
-    """4D floating vector type.
-    """
-    return ti.types.vector(4, float)(*args)  # pylint: disable=E1101
+ivec4 = ti.types.vector(4, cfg().default_ip)
+"""3D signed int vector type.
+"""
 
+uvec2 = ti.types.vector(2, cfg().default_up)
+"""2D unsigned int vector type.
+"""
 
-def ivec2(*args):
-    """2D signed int vector type.
-    """
-    return ti.types.vector(2, int)(*args)  # pylint: disable=E1101
+uvec3 = ti.types.vector(3, cfg().default_up)
+"""3D unsigned int vector type.
+"""
 
+uvec4 = ti.types.vector(4, cfg().default_up)
+"""4D unsigned int vector type.
+"""
 
-def ivec3(*args):
-    """3D signed int vector type.
-    """
-    return ti.types.vector(3, int)(*args)  # pylint: disable=E1101
+mat2 = ti.types.matrix(2, 2, cfg().default_fp)
+"""2x2 floating matrix type.
+"""
 
+mat3 = ti.types.matrix(3, 3, cfg().default_fp)
+"""3x3 floating matrix type.
+"""
 
-def ivec4(*args):
-    """4D signed int vector type.
-    """
-    return ti.types.vector(4, int)(*args)  # pylint: disable=E1101
-
-
-def uvec2(*args):
-    """2D unsigned int vector type.
-    """
-    return ti.types.vector(2, _get_uint_ip())(*args)  # pylint: disable=E1101
-
-
-def uvec3(*args):
-    """3D unsigned int vector type.
-    """
-    return ti.types.vector(3, _get_uint_ip())(*args)  # pylint: disable=E1101
-
-
-def uvec4(*args):
-    """4D unsigned int vector type.
-    """
-    return ti.types.vector(4, _get_uint_ip())(*args)  # pylint: disable=E1101
-
-
-def mat2(*args):
-    """2x2 floating matrix type.
-    """
-    return ti.types.matrix(2, 2, float)(*args)  # pylint: disable=E1101
-
-
-def mat3(*args):
-    """3x3 floating matrix type.
-    """
-    return ti.types.matrix(3, 3, float)(*args)  # pylint: disable=E1101
-
-
-def mat4(*args):
-    """4x4 floating matrix type.
-    """
-    return ti.types.matrix(4, 4, float)(*args)  # pylint: disable=E1101
+mat4 = ti.types.matrix(4, 4, cfg().default_fp)
+"""4x4 floating matrix type.
+"""
 
 
 @ti.func
@@ -494,71 +469,112 @@ def mod(x, y):
 
 
 @ti.func
-def rotate2d(p, ang):
-    """Rotates a 2d vector by a given angle in counter-clockwise.
+def translate(dx, dy, dz):
+    """Constructs a translation Matrix with shape (4, 4).
 
     Args:
-        p (:class:`~taichi.math.vec2`): The 2d vector to rotate.
-        ang (float): Angle of rotation, in radians.
+        dx (float): delta x.
+        dy (float): delta y.
+        dz (float): delta z.
 
     Returns:
-        :class:`~taichi.math.vec2`: The vector after rotation.
+        :class:`~taichi.math.mat4`: translation matrix.
 
     Example::
 
-        >>> from taichi.math import *
-        >>> @ti.kernel
-        >>> def test():
-        >>>     v = vec2(1, 0)
-        >>>     print(rotate2d(v, radians(30)))
-        [0.866025, 0.500000]
+        >>> import math
+        >>> ti.Matrix.translate(1, 2, 3)
+        [[ 1 0 0 1]
+         [ 0 1 0 2]
+         [ 0 0 1 3]
+         [ 0 0 0 1]]
     """
-    ca, sa = ti.cos(ang), ti.sin(ang)
-    x, y = p
-    return vec2(x * ca - p.y * sa, x * sa + y * ca)
+    return mat4([[1., 0., 0., dx], [0., 1., 0., dy], [0., 0., 1., dz],
+                 [0., 0., 0., 1.]])
 
 
 @ti.func
-def rotate3d(p, axis, ang):
-    """Rotates a vector in 3d space, given an axis and angle of rotation.
-
-    The vector `axis` should be a unit vector.
-
-    See "https://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula"
+def scale(sx, sy, sz):
+    """Constructs a scale Matrix with shape (4, 4).
 
     Args:
-        p (:class:`~taichi.math.vec3`): The 3d vector to rotate.
-        axis (:class:`~taichi.math.vec3`): Axis of rotation.
-        ang (float): Angle of rotation, in radians.
+        sx (float): scale x.
+        sy (float): scale y.
+        sz (float): scale z.
+
+    Returns:
+        :class:`~taichi.math.mat4`: scale matrix.
 
     Example::
 
-        >>> from taichi.math import *
-        >>> @ti.kernel
-        >>> def test():
-        >>>     v = vec3(1, 0, 0)
-        >>>     axis = normalize(vec3(1, 1, 1))
-        >>>     print(rotate3d(v, axis, radians(30)))
-        [0.910684, 0.333333, -0.244017]
+        >>> import math
+        >>> ti.Matrix.scale(1, 2, 3)
+        [[ 1 0 0 0]
+         [ 0 2 0 0]
+         [ 0 0 3 0]
+         [ 0 0 0 1]]
+    """
+    return mat4([[sx, 0., 0., 0.], [0., sy, 0., 0.], [0., 0., sz, 0.],
+                 [0., 0., 0., 1.]])
+
+
+@ti.func
+def rot_by_axis(axis, ang):
+    """Returns the 4x4 matrix representation of a 3d rotation with given axis `axis` and angle `ang`.
+
+    Args:
+        axis (vec3): rotation axis
+        ang (float): angle in radians unit
 
     Returns:
-        :class:`~taichi.math.vec3`: The vector after rotation.
+        :class:`~taichi.math.mat4`: rotation matrix
     """
-    ca, sa = ti.cos(ang), ti.sin(ang)
-    return mix(dot(p, axis) * axis, p, ca) + cross(axis, p) * sa
+    c = ti.cos(ang)
+    s = ti.sin(ang)
+
+    axis = normalize(axis)
+    temp = (1 - c) * axis
+    return mat4([[
+        c + temp[0] * axis[0], temp[0] * axis[1] + s * axis[2],
+        temp[0] * axis[2] - s * axis[1], 0.
+    ],
+                 [
+                     temp[1] * axis[0] - s * axis[2], c + temp[1] * axis[1],
+                     temp[1] * axis[2] + s * axis[0], 0.
+                 ],
+                 [
+                     temp[2] * axis[0] + s * axis[1],
+                     temp[2] * axis[1] - s * axis[0], c + temp[2] * axis[2], 0.
+                 ], [0., 0., 0., 1.]])
 
 
 @ti.func
-def eye(n: ti.template()):
-    """Returns the nxn identity matrix.
+def rot_yaw_pitch_roll(yaw, pitch, roll):
+    """Returns a 4x4 homogeneous rotation matrix representing the 3d rotation with Euler angles (rotate with Y axis first, X axis second, Z axis third).
 
-    Alias for :func:`~taichi.Matrix.identity`.
+    Args:
+        yaw   (float): yaw angle in radians unit
+        pitch (float): pitch angle in radians unit
+        roll  (float): roll angle in radians unit
+
+    Returns:
+        :class:`~taichi.math.mat4`: rotation matrix
     """
-    return ti.Matrix.identity(float, n)
+    ch = ti.cos(yaw)
+    sh = ti.sin(yaw)
+    cp = ti.cos(pitch)
+    sp = ti.sin(pitch)
+    cb = ti.cos(roll)
+    sb = ti.sin(roll)
+
+    return mat4(
+        [[ch * cb + sh * sp * sb, sb * cp, -sh * cb + ch * sp * sb, 0.],
+         [-ch * sb + sh * sp * cb, cb * cp, sb * sh + ch * sp * cb, 0.],
+         [sh * cp, -sp, ch * cp, 0.], [0., 0., 0., 1.]])
 
 
 @ti.func
-def rot2(ang):
+def rotation2d(ang):
     """Returns the matrix representation of a 2d counter-clockwise rotation,
     given the angle of rotation.
 
@@ -573,7 +589,7 @@ def rot2(ang):
         >>> from taichi.math import *
         >>> @ti.kernel
         >>> def test():
-        >>>     M = rot2(radians(30))
+        >>>     M = rotation2d(radians(30))
         [[0.866025, -0.500000], [0.500000, 0.866025]]
     """
     ca, sa = ti.cos(ang), ti.sin(ang)
@@ -581,32 +597,33 @@ def rot2(ang):
 
 
 @ti.func
-def rot3(axis, ang):
-    """Returns the matrix representation of a 3d rotation,
-    given the axis and angle of rotation.
+def rotation3d(ang_x, ang_y, ang_z):
+    """Returns a 4x4 homogeneous rotation matrix representing the 3d rotation with Euler angles (rotate with Y axis first, X axis second, Z axis third).
 
     Args:
-        axis (:class:`~taichi.math.vec3`): Axis of rotation.
-        ang (float): Angle of rotation in radians.
-
+        ang_x (float): angle in radians unit around X axis
+        ang_y (float): angle in radians unit around Y axis
+        ang_z (float): angle in radians unit around Z axis
     Returns:
-        :class:`~taichi.math.mat3`: 3x3 rotation matrix.
-
-    Example::
-
-        >>> from taichi.math import *
-        >>> @ti.kernel
-        >>> def test():
-        >>>     M = rot3(normalize(vec3(1, 1, 1)), radians(30))
-        [[0.732051, -0.366025, 0.633975],
-         [0.633975, 0.732051, -0.366025],
-         [-0.366025, 0.633975, 0.732051]]
+        :class:`~taichi.math.mat4`: rotation matrix
+    Example:
+        >>> import math
+        >>> rotation3d(0.52, -0.785, 1.046)
+        [[ 0.05048351 -0.61339645 -0.78816002  0.        ]
+        [ 0.65833154  0.61388511 -0.4355969   0.        ]
+        [ 0.75103329 -0.49688014  0.4348093   0.        ]
+        [ 0.          0.          0.          1.        ]]
     """
-    ca, sa = ti.cos(ang), ti.sin(ang)
-    x, y, z = axis
-    I = eye(3)
-    K = mat3([[0, -z, y], [z, 0, -x], [-y, x, 0]])
-    return I + sa * K + (1.0 - ca) * K @ K
+    return rot_yaw_pitch_roll(ang_z, ang_x, ang_y)
+
+
+@ti.func
+def eye(n: ti.template()):
+    """Returns the nxn identity matrix.
+
+    Alias for :func:`~taichi.Matrix.identity`.
+    """
+    return ti.Matrix.identity(float, n)
 
 
 @ti.func
@@ -750,9 +767,9 @@ __all__ = [
     "acos", "asin", "atan2", "ceil", "clamp", "cos", "cross", "degrees",
     "determinant", "distance", "dot", "e", "exp", "eye", "floor", "fract",
     "inf", "inverse", "isinf", "isnan", "ivec2", "ivec3", "ivec4", "length",
-    "log", "log2", "mat2", "mat3", "mat4", "max", "min", "mix", "mod", "nan",
-    "normalize", "pi", "pow", "radians", "reflect", "refract", "rot2", "rot3",
-    "rotate2d", "rotate3d", "round", "sign", "sin", "smoothstep", "sqrt",
-    "step", "tan", "tanh", "uvec2", "uvec3", "uvec4", "vdir", "vec2", "vec3",
-    "vec4"
+    "log", "log2", "mat2", "mat3", "mat4", "max", "min", "mix", "mod",
+    "translate", "scale", "nan", "normalize", "pi", "pow", "radians",
+    "reflect", "refract", "rot_by_axis", "rot_yaw_pitch_roll", "rotation2d",
+    "rotation3d", "round", "sign", "sin", "smoothstep", "sqrt", "step", "tan",
+    "tanh", "uvec2", "uvec3", "uvec4", "vdir", "vec2", "vec3", "vec4"
 ]

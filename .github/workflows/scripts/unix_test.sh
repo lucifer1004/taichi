@@ -1,21 +1,16 @@
 #!/bin/bash
 set -ex
 
-export PYTHONUNBUFFERED=1
+. $(dirname $0)/common-utils.sh
 
-check_in_docker() {
-    # This is a temporary solution to detect in a docker, but it should work
-    if [[ $(whoami) == "dev" ]]; then
-        echo "true"
-    else
-        echo "false"
-    fi
-}
+export PYTHONUNBUFFERED=1
 
 export TI_SKIP_VERSION_CHECK=ON
 export TI_CI=1
 export TI_IN_DOCKER=$(check_in_docker)
 export LD_LIBRARY_PATH=$PWD/build/:$LD_LIBRARY_PATH
+export TI_OFFLINE_CACHE_FILE_PATH=$PWD/.cache/taichi
+
 
 if [[ "$TI_IN_DOCKER" == "true" ]]; then
     source $HOME/miniconda/etc/profile.d/conda.sh
@@ -51,7 +46,7 @@ ti diagnose
 ti changelog
 echo "wanted archs: $TI_WANTED_ARCHS"
 
-if [ "$TI_RUN_RELEASE_TESTS" == "1" ]; then
+if [ "$TI_RUN_RELEASE_TESTS" == "1" -a -z "$TI_LITE_TEST" ]; then
     python3 -m pip install PyYAML
     git clone https://github.com/taichi-dev/taichi-release-tests
     mkdir -p repos/taichi/python/taichi
@@ -66,7 +61,7 @@ EOF
 fi
 
 
-if [ ! -z $TI_SKIP_CPP_TESTS ]; then
+if [ -z "$TI_SKIP_CPP_TESTS" ]; then
     python3 tests/run_tests.py --cpp
 fi
 
@@ -88,7 +83,8 @@ if [ -z "$GPU_TEST" ]; then
 else
     # Split per arch to increase parallelism for linux GPU tests
     if [[ $TI_WANTED_ARCHS == *"cuda"* ]]; then
-        python3 tests/run_tests.py -vr2 -t4 -k "not torch and not paddle" -a cuda
+        # FIXME: suddenly tests exibit OOM on nvidia driver 470 + RTX2060 cards, lower parallelism by 1 (4->3)
+        python3 tests/run_tests.py -vr2 -t3 -k "not torch and not paddle" -a cuda
     fi
     if [[ $TI_WANTED_ARCHS == *"cpu"* ]]; then
         python3 tests/run_tests.py -vr2 -t8 -k "not torch and not paddle" -a cpu

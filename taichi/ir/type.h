@@ -5,6 +5,8 @@
 
 TLANG_NAMESPACE_BEGIN
 
+class TensorType;
+
 enum class PrimitiveTypeID : int {
 #define PER_TYPE(x) x,
 #include "taichi/inc/data_type.inc.h"
@@ -37,8 +39,6 @@ class TI_DLL_EXPORT Type {
                    typeid(T).name());
     return p;
   }
-
-  int vector_width() const;
 
   bool is_primitive(PrimitiveTypeID type) const;
 
@@ -100,6 +100,10 @@ class TI_DLL_EXPORT DataType {
   void set_is_pointer(bool ptr);
 
   DataType ptr_removed() const;
+
+  std::vector<int> get_shape() const;
+
+  DataType get_element_type() const;
 
  private:
   Type *ptr_;
@@ -273,7 +277,6 @@ class BitStructType : public Type {
   BitStructType(PrimitiveType *physical_type,
                 const std::vector<Type *> &member_types,
                 const std::vector<int> &member_bit_offsets,
-                const std::vector<bool> &member_owns_shared_exponents,
                 const std::vector<int> &member_exponents,
                 const std::vector<std::vector<int>> &member_exponent_users);
 
@@ -296,7 +299,8 @@ class BitStructType : public Type {
   }
 
   bool get_member_owns_shared_exponent(int i) const {
-    return member_owns_shared_exponents_[i];
+    return member_exponents_[i] != -1 &&
+           member_exponent_users_[member_exponents_[i]].size() > 1;
   }
 
   int get_member_exponent(int i) const {
@@ -311,7 +315,6 @@ class BitStructType : public Type {
   PrimitiveType *physical_type_;
   std::vector<Type *> member_types_;
   std::vector<int> member_bit_offsets_;
-  std::vector<bool> member_owns_shared_exponents_;
   std::vector<int> member_exponents_;
   std::vector<std::vector<int>> member_exponent_users_;
 };

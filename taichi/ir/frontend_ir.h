@@ -65,7 +65,7 @@ class FrontendAllocaStmt : public Stmt {
 
   FrontendAllocaStmt(const Identifier &lhs, DataType type)
       : ident(lhs), is_shared(false) {
-    ret_type = TypeFactory::create_vector_or_scalar_type(1, type);
+    ret_type = type;
   }
 
   FrontendAllocaStmt(const Identifier &lhs,
@@ -441,24 +441,28 @@ class ExternalTensorExpression : public Expression {
   int element_dim;  // 0: scalar; 1: vector (SOA); 2: matrix (SOA); -1: vector
                     // (AOS); -2: matrix (AOS)
 
-  // Fill element shape if compile-time specialization is desired.
-  std::vector<int> element_shape;
-
   ExternalTensorExpression(const DataType &dt,
                            int dim,
                            int arg_id,
-                           int element_dim)
-      : dt(dt), dim(dim), arg_id(arg_id), element_dim(element_dim) {
-    set_attribute("dim", std::to_string(dim));
+                           int element_dim) {
+    init(dt, dim, arg_id, element_dim);
   }
 
   ExternalTensorExpression(const DataType &dt,
                            int dim,
                            int arg_id,
                            int element_dim,
-                           const std::vector<int> &element_shape)
-      : ExternalTensorExpression(dt, dim, arg_id, element_dim) {
-    this->element_shape = element_shape;
+                           const std::vector<int> &element_shape) {
+    if (element_shape.size() == 0) {
+      init(dt, dim, arg_id, element_dim);
+    } else {
+      TI_ASSERT(dt->is<PrimitiveType>());
+
+      auto tensor_type =
+          taichi::lang::TypeFactory::get_instance().create_tensor_type(
+              element_shape, dt);
+      init(tensor_type, dim, arg_id, element_dim);
+    }
   }
 
   void type_check(CompileConfig *config) override {
@@ -467,6 +471,14 @@ class ExternalTensorExpression : public Expression {
   void flatten(FlattenContext *ctx) override;
 
   TI_DEFINE_ACCEPT_FOR_EXPRESSION
+
+ private:
+  void init(const DataType &dt, int dim, int arg_id, int element_dim) {
+    this->dt = dt;
+    this->dim = dim;
+    this->arg_id = arg_id;
+    this->element_dim = element_dim;
+  }
 };
 
 // TODO: Make this a non-expr
@@ -476,11 +488,12 @@ class GlobalVariableExpression : public Expression {
   DataType dt;
   std::string name;
   SNode *snode{nullptr};
+  SNodeGradType snode_grad_type{SNodeGradType::kPrimal};
   bool has_ambient{false};
   TypedConstant ambient_value;
-  bool is_primal{true};
   Expr adjoint;
   Expr dual;
+  Expr adjoint_checkbit;
 
   GlobalVariableExpression(DataType dt, const Identifier &ident)
       : ident(ident), dt(dt) {
@@ -495,8 +508,30 @@ class GlobalVariableExpression : public Expression {
 
   void set_snode(SNode *snode) {
     this->snode = snode;
-    set_attribute("dim", std::to_string(snode->num_active_indices));
   }
+
+  void flatten(FlattenContext *ctx) override;
+
+  TI_DEFINE_ACCEPT_FOR_EXPRESSION
+};
+
+/**
+ * Creating a local matrix;
+ * lowered from ti.Matrix with real_matrix=True
+ */
+class MatrixExpression : public Expression {
+ public:
+  std::vector<Expr> elements;
+  DataType dt;
+
+  MatrixExpression(const std::vector<Expr> &elements,
+                   std::vector<int> shape,
+                   DataType element_type)
+      : elements(elements) {
+    this->dt = DataType(TypeFactory::create_tensor_type(shape, element_type));
+  }
+
+  void type_check(CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -510,8 +545,11 @@ class IndexExpression : public Expression {
   Expr var;
   ExprGroup indices;
 
-  IndexExpression(const Expr &var, const ExprGroup &indices)
+  IndexExpression(const Expr &var,
+                  const ExprGroup &indices,
+                  std::string tb = "")
       : var(var), indices(indices) {
+    this->tb = tb;
   }
 
   void type_check(CompileConfig *config) override;
@@ -852,13 +890,18 @@ class ASTBuilder {
   Block *current_block();
   Stmt *get_last_stmt();
   void stop_gradient(SNode *);
-  void insert_assignment(Expr &lhs, const Expr &rhs);
-  Expr make_var(const Expr &x);
+  void insert_assignment(Expr &lhs,
+                         const Expr &rhs,
+                         const std::string &tb = "");
+  Expr make_var(const Expr &x, std::string tb);
   void insert_for(const Expr &s,
                   const Expr &e,
                   const std::function<void(Expr)> &func);
 
   Expr make_id_expr(const std::string &name);
+  Expr make_matrix_expr(const std::vector<int> &shape,
+                        const DataType &dt,
+                        const std::vector<Expr> &elements);
   Expr insert_thread_idx_expr();
   Expr insert_patch_idx_expr();
   void create_kernel_exprgroup_return(const ExprGroup &group);
@@ -877,7 +920,8 @@ class ASTBuilder {
   Expr expr_alloca();
   Expr expr_alloca_local_tensor(const std::vector<int> &shape,
                                 const DataType &element_type,
-                                const ExprGroup &elements);
+                                const ExprGroup &elements,
+                                std::string tb);
   Expr expr_alloca_shared_array(const std::vector<int> &shape,
                                 const DataType &element_type);
   void expr_assign(const Expr &lhs, const Expr &rhs, std::string tb);
@@ -913,7 +957,7 @@ class ASTBuilder {
   }
 
   void block_dim(int v) {
-    if (arch_ == Arch::cuda) {
+    if (arch_ == Arch::cuda || arch_ == Arch::vulkan) {
       TI_ASSERT((v % 32 == 0) || bit::is_power_of_two(v));
     } else {
       TI_ASSERT(bit::is_power_of_two(v));

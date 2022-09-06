@@ -337,6 +337,8 @@ def init(arch=None,
             * ``debug`` (bool): Enables the debug mode, under which Taichi does a few more things like boundary checks.
             * ``print_ir`` (bool): Prints the CHI IR of the Taichi kernels.
             * ``packed`` (bool): Enables the packed memory layout. See https://docs.taichi-lang.org/docs/layout.
+            *``offline_cache`` (bool): Enables offline cache of the compiled kernels. Default to True. When this is enabled Taichi will cache compiled kernel on your local disk to accelerate future calls.
+            *``random_seed`` (int): Sets the seed of the random generator. The default is 0.
     """
     # Check version for users every 7 days if not disabled by users.
     _version_check.start_version_check_thread()
@@ -350,6 +352,10 @@ def init(arch=None,
     if require_version is not None:
         check_require_version(require_version)
 
+    if "default_up" in kwargs:
+        raise KeyError(
+            "'default_up' is always the unsigned type of 'default_ip'. Please set 'default_ip' instead."
+        )
     # Make a deepcopy in case these args reference to items from ti.cfg, which are
     # actually references. If no copy is made and the args are indeed references,
     # ti.reset() could override the args to their default values.

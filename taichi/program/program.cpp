@@ -328,6 +328,8 @@ Arch Program::get_accessor_arch() {
     return Arch::cc;
   } else if (config.arch == Arch::dx11) {
     return Arch::dx11;
+  } else if (config.arch == Arch::dx12) {
+    return Arch::dx12;
   } else {
     return get_host_arch();
   }
@@ -349,7 +351,7 @@ Kernel &Program::get_snode_reader(SNode *snode) {
   ker.name = kernel_name;
   ker.is_accessor = true;
   for (int i = 0; i < snode->num_active_indices; i++)
-    ker.insert_arg(PrimitiveType::i32, false);
+    ker.insert_scalar_arg(PrimitiveType::i32);
   ker.insert_ret(snode->dt);
   return ker;
 }
@@ -364,15 +366,17 @@ Kernel &Program::get_snode_writer(SNode *snode) {
     }
     auto expr = Expr(snode_to_glb_var_exprs_.at(snode))[indices];
     this->current_ast_builder()->insert_assignment(
-        expr, Expr::make<ArgLoadExpression>(snode->num_active_indices,
-                                            snode->dt->get_compute_type()));
+        expr,
+        Expr::make<ArgLoadExpression>(snode->num_active_indices,
+                                      snode->dt->get_compute_type()),
+        expr->tb);
   });
   ker.set_arch(get_accessor_arch());
   ker.name = kernel_name;
   ker.is_accessor = true;
   for (int i = 0; i < snode->num_active_indices; i++)
-    ker.insert_arg(PrimitiveType::i32, false);
-  ker.insert_arg(snode->dt, false);
+    ker.insert_scalar_arg(PrimitiveType::i32);
+  ker.insert_scalar_arg(snode->dt);
   return ker;
 }
 
@@ -456,25 +460,24 @@ std::size_t Program::get_snode_num_dynamically_allocated(SNode *snode) {
 
 Ndarray *Program::create_ndarray(const DataType type,
                                  const std::vector<int> &shape,
-                                 const std::vector<int> &element_shape,
                                  ExternalArrayLayout layout) {
-  ndarrays_.emplace_back(
-      std::make_unique<Ndarray>(this, type, shape, element_shape, layout));
+  ndarrays_.emplace_back(std::make_unique<Ndarray>(this, type, shape, layout));
   return ndarrays_.back().get();
 }
 
 Texture *Program::create_texture(const DataType type,
                                  int num_channels,
                                  const std::vector<int> &shape) {
+  BufferFormat buffer_format = type_channels2buffer_format(type, num_channels);
   if (shape.size() == 1) {
     textures_.push_back(
-        std::make_unique<Texture>(this, type, num_channels, shape[0], 1, 1));
+        std::make_unique<Texture>(this, buffer_format, shape[0], 1, 1));
   } else if (shape.size() == 2) {
-    textures_.push_back(std::make_unique<Texture>(this, type, num_channels,
-                                                  shape[0], shape[1], 1));
+    textures_.push_back(
+        std::make_unique<Texture>(this, buffer_format, shape[0], shape[1], 1));
   } else if (shape.size() == 3) {
-    textures_.push_back(std::make_unique<Texture>(
-        this, type, num_channels, shape[0], shape[1], shape[2]));
+    textures_.push_back(std::make_unique<Texture>(this, buffer_format, shape[0],
+                                                  shape[1], shape[2]));
   } else {
     TI_ERROR("Texture shape invalid");
   }

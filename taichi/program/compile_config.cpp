@@ -23,6 +23,7 @@ CompileConfig::CompileConfig() {
   debug = false;
   cfg_optimization = true;
   check_out_of_bound = false;
+  validate_autodiff = false;
   lazy_compilation = true;
   serial_schedule = false;
   simplify_before_lower_access = true;
@@ -31,6 +32,7 @@ CompileConfig::CompileConfig() {
   move_loop_invariant_outside_if = false;
   default_fp = PrimitiveType::f32;
   default_ip = PrimitiveType::i32;
+  default_up = PrimitiveType::u32;
   verbose_kernel_launches = false;
   kernel_profiler = false;
   default_cpu_block_dim = 32;
@@ -46,6 +48,7 @@ CompileConfig::CompileConfig() {
   detect_read_only = true;
   ndarray_use_cached_allocator = true;
   use_mesh = false;
+  real_matrix = false;
 
   saturating_grid_dim = 0;
   max_block_dim = 0;
@@ -57,7 +60,6 @@ CompileConfig::CompileConfig() {
   print_kernel_llvm_ir = false;
   print_kernel_nvptx = false;
   print_kernel_llvm_ir_optimized = false;
-  num_compile_threads = 2;
 
   // CUDA backend options:
   device_memory_GB = 1;  // by default, preallocate 1 GB GPU memory

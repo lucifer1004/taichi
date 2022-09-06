@@ -146,9 +146,11 @@ class TaskCodegen : public IRVisitor {
     }
   }
 
-  void visit(ConstStmt *const_stmt) override {
-    TI_ASSERT(const_stmt->width() == 1);
+  void visit(PrintStmt *print_stmt) override {
+    TI_WARN("Printing is not yet supported in Vulkan");
+  }
 
+  void visit(ConstStmt *const_stmt) override {
     auto get_const = [&](const TypedConstant &const_val) {
       auto dt = const_val.dt.ptr_removed();
       spirv::SType stype = ir_->get_primitive_type(dt);
@@ -190,35 +192,53 @@ class TaskCodegen : public IRVisitor {
       }
     };
 
-    spirv::Value val = get_const(const_stmt->val[0]);
+    spirv::Value val = get_const(const_stmt->val);
     ir_->register_value(const_stmt->raw_name(), val);
   }
 
   void visit(AllocaStmt *alloca) override {
-    spirv::SType src_type = ir_->get_primitive_type(alloca->element_type());
-    spirv::Value ptr_val = ir_->alloca_variable(src_type);
-    ir_->store_variable(ptr_val, ir_->get_zero(src_type));
-    ir_->register_value(alloca->raw_name(), ptr_val);
+    if (alloca->ret_type->is<TensorType>()) {
+      // Alloca for shared memory / workgroup memory
+      if (!alloca->is_shared) {
+        TI_ERROR(
+            "Tensor type for dyanmic index is not yet supported on Vulkan.");
+      }
+      auto tensor_type = alloca->ret_type->cast<TensorType>();
+      auto elem_num = tensor_type->get_num_elements();
+      spirv::SType elem_type =
+          ir_->get_primitive_type(tensor_type->get_element_type());
+
+      spirv::SType arr_type = ir_->get_array_type(elem_type, elem_num);
+      spirv::Value ptr_val = ir_->alloca_workgroup_array(arr_type);
+      shared_array_binds_.push_back(ptr_val);
+      ir_->register_value(alloca->raw_name(), ptr_val);
+    } else {
+      // Alloca for a single variable
+      spirv::SType src_type = ir_->get_primitive_type(alloca->element_type());
+      spirv::Value ptr_val = ir_->alloca_variable(src_type);
+      ir_->store_variable(ptr_val, ir_->get_zero(src_type));
+      ir_->register_value(alloca->raw_name(), ptr_val);
+    }
+  }
+
+  void visit(PtrOffsetStmt *stmt) override {
+    spirv::SType data_type =
+        ir_->get_primitive_type(stmt->element_type().ptr_removed());
+    spirv::SType ptr_type =
+        ir_->get_pointer_type(data_type, spv::StorageClassWorkgroup);
+    auto origin_val = ir_->query_value(stmt->origin->raw_name());
+    auto offset_val = ir_->query_value(stmt->offset->raw_name());
+    Value offset_ptr =
+        ir_->make_value(spv::OpAccessChain, ptr_type, origin_val, offset_val);
+    ir_->register_value(stmt->raw_name(), offset_ptr);
   }
 
   void visit(LocalLoadStmt *stmt) override {
-    // TODO: optimize for partially vectorized load...
-    bool linear_index = true;
-    for (int i = 0; i < (int)stmt->src.size(); i++) {
-      if (stmt->src[i].offset != i) {
-        linear_index = false;
-      }
-    }
-    if (stmt->same_source() && linear_index &&
-        stmt->width() == stmt->src[0].var->width()) {
-      auto ptr = stmt->src[0].var;
-      spirv::Value ptr_val = ir_->query_value(ptr->raw_name());
-      spirv::Value val = ir_->load_variable(
-          ptr_val, ir_->get_primitive_type(stmt->element_type()));
-      ir_->register_value(stmt->raw_name(), val);
-    } else {
-      TI_NOT_IMPLEMENTED
-    }
+    auto ptr = stmt->src;
+    spirv::Value ptr_val = ir_->query_value(ptr->raw_name());
+    spirv::Value val = ir_->load_variable(
+        ptr_val, ir_->get_primitive_type(stmt->element_type()));
+    ir_->register_value(stmt->raw_name(), val);
   }
 
   void visit(LocalStoreStmt *stmt) override {
@@ -476,15 +496,12 @@ class TaskCodegen : public IRVisitor {
   }
 
   void visit(GlobalStoreStmt *stmt) override {
-    TI_ASSERT(stmt->width() == 1);
-
     spirv::Value val = ir_->query_value(stmt->val->raw_name());
 
     store_buffer(stmt->dest, val);
   }
 
   void visit(GlobalLoadStmt *stmt) override {
-    TI_ASSERT(stmt->width() == 1);
     auto dt = stmt->element_type();
 
     auto val = load_buffer(stmt->src, dt);
@@ -531,7 +548,6 @@ class TaskCodegen : public IRVisitor {
   }
 
   void visit(GlobalTemporaryStmt *stmt) override {
-    TI_ASSERT(stmt->width() == 1);
     spirv::Value val = ir_->int_immediate_number(ir_->i32_type(), stmt->offset,
                                                  false);  // Named Constant
     ir_->register_value(stmt->raw_name(), val);
@@ -560,9 +576,8 @@ class TaskCodegen : public IRVisitor {
   void visit(ExternalPtrStmt *stmt) override {
     // Used mostly for transferring data between host (e.g. numpy array) and
     // device.
-    TI_ASSERT(stmt->width() == 1);
     spirv::Value linear_offset = ir_->int_immediate_number(ir_->i32_type(), 0);
-    const auto *argload = stmt->base_ptrs[0]->as<ArgLoadStmt>();
+    const auto *argload = stmt->base_ptr->as<ArgLoadStmt>();
     const int arg_id = argload->arg_id;
     {
       const int num_indices = stmt->indices.size();
@@ -1074,7 +1089,28 @@ class TaskCodegen : public IRVisitor {
         "subgroupInclusiveMax", "subgroupInclusiveAnd", "subgroupInclusiveOr",
         "subgroupInclusiveXor"};
 
-    if (stmt->func_name == "subgroupElect") {
+    if (stmt->func_name == "workgroupBarrier") {
+      ir_->make_inst(
+          spv::OpControlBarrier,
+          ir_->int_immediate_number(ir_->i32_type(), spv::ScopeWorkgroup),
+          ir_->int_immediate_number(ir_->i32_type(), spv::ScopeWorkgroup),
+          ir_->int_immediate_number(
+              ir_->i32_type(), spv::MemorySemanticsWorkgroupMemoryMask |
+                                   spv::MemorySemanticsAcquireReleaseMask));
+      val = ir_->const_i32_zero_;
+    } else if (stmt->func_name == "localInvocationId") {
+      val = ir_->cast(ir_->i32_type(), ir_->get_local_invocation_id(0));
+    } else if (stmt->func_name == "vkGlobalThreadIdx") {
+      val = ir_->cast(ir_->i32_type(), ir_->get_global_invocation_id(0));
+    } else if (stmt->func_name == "workgroupMemoryBarrier") {
+      ir_->make_inst(
+          spv::OpMemoryBarrier,
+          ir_->int_immediate_number(ir_->i32_type(), spv::ScopeWorkgroup),
+          ir_->int_immediate_number(
+              ir_->i32_type(), spv::MemorySemanticsWorkgroupMemoryMask |
+                                   spv::MemorySemanticsAcquireReleaseMask));
+      val = ir_->const_i32_zero_;
+    } else if (stmt->func_name == "subgroupElect") {
       val = ir_->make_value(
           spv::OpGroupNonUniformElect, ir_->bool_type(),
           ir_->int_immediate_number(ir_->i32_type(), spv::ScopeSubgroup));
@@ -1170,7 +1206,6 @@ class TaskCodegen : public IRVisitor {
   }
 
   void visit(AtomicOpStmt *stmt) override {
-    TI_ASSERT(stmt->width() == 1);
     const auto dt = stmt->dest->element_type().ptr_removed();
 
     spirv::Value data = ir_->query_value(stmt->val->raw_name());
@@ -1382,7 +1417,6 @@ class TaskCodegen : public IRVisitor {
   }
 
   void visit(RangeForStmt *for_stmt) override {
-    TI_ASSERT(for_stmt->width() == 1);
     auto loop_var_name = for_stmt->raw_name();
     // Must get init label after making value(to make sure they are correct)
     spirv::Label init_label = ir_->current_label();
@@ -1517,6 +1551,7 @@ class TaskCodegen : public IRVisitor {
     ir_->set_work_group_size(group_size);
     std::vector<spirv::Value> buffers;
     if (device_->get_cap(DeviceCapability::spirv_version) > 0x10300) {
+      buffers = shared_array_binds_;
       for (const auto &bb : task_attribs_.buffer_binds) {
         for (auto &it : buffer_value_map_) {
           if (it.first.first == bb.buffer) {
@@ -2170,6 +2205,7 @@ class TaskCodegen : public IRVisitor {
                      BufferInfoTypeTupleHasher>
       buffer_binding_map_;
   std::vector<TextureBind> texture_binds_;
+  std::vector<spirv::Value> shared_array_binds_;
   spirv::Value kernel_function_;
   spirv::Label kernel_return_label_;
   bool gen_label_{false};
@@ -2295,7 +2331,7 @@ void KernelCodegen::run(TaichiKernelAttributes &kernel_attribs,
     do {
       last_size = optimized_spv.size();
       bool result = false;
-      TI_WARN_IF(
+      TI_ERROR_IF(
           (result = !spirv_opt_->Run(optimized_spv.data(), optimized_spv.size(),
                                      &optimized_spv, spirv_opt_options_)),
           "SPIRV optimization failed");

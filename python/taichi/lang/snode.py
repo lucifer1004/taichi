@@ -156,12 +156,17 @@ class SNode:
         To know more details about primal, adjoint fields and ``lazy_grad()``,
         please see Page 4 and Page 13-14 of DiffTaichi Paper: https://arxiv.org/pdf/1910.00935.pdf
         """
-        self.ptr.lazy_grad(True, False)
+        self.ptr.lazy_grad()
 
     def lazy_dual(self):
         """Automatically place the dual fields following the layout of their primal fields.
         """
-        self.ptr.lazy_grad(False, True)
+        self.ptr.lazy_dual()
+
+    def _allocate_adjoint_checkbit(self):
+        """Automatically place the adjoint flag fields following the layout of their primal fields for global data access rule checker
+        """
+        self.ptr.allocate_adjoint_checkbit()
 
     def parent(self, n=1):
         """Gets an ancestor of `self` in the SNode tree.
@@ -366,8 +371,9 @@ def append(node, indices, val):
         val (:mod:`~taichi.types`): the data to be appended.
     """
     a = impl.expr_init(
-        _ti_core.insert_append(node._snode.ptr, expr.make_expr_group(indices),
-                               expr.Expr(val).ptr))
+        _ti_core.expr_snode_append(node._snode.ptr,
+                                   expr.make_expr_group(indices),
+                                   expr.Expr(val).ptr))
     return a
 
 
@@ -383,8 +389,8 @@ def is_active(node, indices):
         bool: the cell `node[indices]` is active or not.
     """
     return expr.Expr(
-        _ti_core.insert_is_active(node._snode.ptr,
-                                  expr.make_expr_group(indices)))
+        _ti_core.expr_snode_is_active(node._snode.ptr,
+                                      expr.make_expr_group(indices)))
 
 
 def activate(node, indices):
@@ -423,7 +429,8 @@ def length(node, indices):
         int: the length of cell `node[indices]`.
     """
     return expr.Expr(
-        _ti_core.insert_len(node._snode.ptr, expr.make_expr_group(indices)))
+        _ti_core.expr_snode_length(node._snode.ptr,
+                                   expr.make_expr_group(indices)))
 
 
 def get_addr(f, indices):
@@ -439,7 +446,8 @@ def get_addr(f, indices):
         ti.u64: The memory address of `f[indices]`.
     """
     return expr.Expr(
-        _ti_core.expr_get_addr(f._snode.ptr, expr.make_expr_group(indices)))
+        _ti_core.expr_snode_get_addr(f._snode.ptr,
+                                     expr.make_expr_group(indices)))
 
 
 __all__ = [

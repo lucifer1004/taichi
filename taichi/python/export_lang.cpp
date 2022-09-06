@@ -93,8 +93,16 @@ void export_lang(py::module &m) {
 
   py::enum_<AutodiffMode>(m, "AutodiffMode", py::arithmetic())
       .value("NONE", AutodiffMode::kNone)
+      .value("VALIDATION", AutodiffMode::kCheckAutodiffValid)
       .value("FORWARD", AutodiffMode::kForward)
       .value("REVERSE", AutodiffMode::kReverse)
+      .export_values();
+
+  py::enum_<SNodeGradType>(m, "SNodeGradType", py::arithmetic())
+      .value("PRIMAL", SNodeGradType::kPrimal)
+      .value("ADJOINT", SNodeGradType::kAdjoint)
+      .value("DUAL", SNodeGradType::kDual)
+      .value("ADJOINT_CHECKBIT", SNodeGradType::kAdjointCheckbit)
       .export_values();
 
   // TODO(type): This should be removed
@@ -104,6 +112,8 @@ void export_lang(py::module &m) {
       .def("__hash__", &DataType::hash)
       .def("to_string", &DataType::to_string)
       .def("__str__", &DataType::to_string)
+      .def("shape", &DataType::get_shape)
+      .def("element_type", &DataType::get_element_type)
       .def(
           "get_ptr", [](DataType *dtype) -> Type * { return *dtype; },
           py::return_value_policy::reference)
@@ -136,6 +146,7 @@ void export_lang(py::module &m) {
       .def_readwrite("debug", &CompileConfig::debug)
       .def_readwrite("cfg_optimization", &CompileConfig::cfg_optimization)
       .def_readwrite("check_out_of_bound", &CompileConfig::check_out_of_bound)
+      .def_readwrite("validate_autodiff", &CompileConfig::validate_autodiff)
       .def_readwrite("print_accessor_ir", &CompileConfig::print_accessor_ir)
       .def_readwrite("print_evaluator_ir", &CompileConfig::print_evaluator_ir)
       .def_readwrite("use_llvm", &CompileConfig::use_llvm)
@@ -175,6 +186,7 @@ void export_lang(py::module &m) {
       .def_readwrite("timeline", &CompileConfig::timeline)
       .def_readwrite("default_fp", &CompileConfig::default_fp)
       .def_readwrite("default_ip", &CompileConfig::default_ip)
+      .def_readwrite("default_up", &CompileConfig::default_up)
       .def_readwrite("device_memory_GB", &CompileConfig::device_memory_GB)
       .def_readwrite("device_memory_fraction",
                      &CompileConfig::device_memory_fraction)
@@ -190,6 +202,7 @@ void export_lang(py::module &m) {
       .def_readwrite("ndarray_use_cached_allocator",
                      &CompileConfig::ndarray_use_cached_allocator)
       .def_readwrite("use_mesh", &CompileConfig::use_mesh)
+      .def_readwrite("real_matrix", &CompileConfig::real_matrix)
       .def_readwrite("cc_compile_cmd", &CompileConfig::cc_compile_cmd)
       .def_readwrite("cc_link_cmd", &CompileConfig::cc_link_cmd)
       .def_readwrite("quant_opt_store_fusion",
@@ -280,6 +293,7 @@ void export_lang(py::module &m) {
       .def("insert_deactivate", &ASTBuilder::insert_snode_deactivate)
       .def("insert_activate", &ASTBuilder::insert_snode_activate)
       .def("insert_external_func_call", &ASTBuilder::insert_external_func_call)
+      .def("make_matrix_expr", &ASTBuilder::make_matrix_expr)
       .def("expr_alloca", &ASTBuilder::expr_alloca)
       .def("expr_alloca_local_tensor", &ASTBuilder::expr_alloca_local_tensor)
       .def("expr_alloca_shared_array", &ASTBuilder::expr_alloca_shared_array)
@@ -312,6 +326,10 @@ void export_lang(py::module &m) {
       .def_readonly("config", &Program::config)
       .def("sync_kernel_profiler",
            [](Program *program) { program->profiler->sync(); })
+      .def("update_kernel_profiler",
+           [](Program *program) { program->profiler->update(); })
+      .def("clear_kernel_profiler",
+           [](Program *program) { program->profiler->clear(); })
       .def("query_kernel_profile_info",
            [](Program *program, const std::string &name) {
              return program->query_kernel_profile_info(name);
@@ -339,7 +357,6 @@ void export_lang(py::module &m) {
            [](Program *program, const std::string toolkit_name) {
              return program->profiler->set_profiler_toolkit(toolkit_name);
            })
-      .def("clear_kernel_profile_info", &Program::clear_kernel_profile_info)
       .def("timeline_clear",
            [](Program *) { Timelines::get_instance().clear(); })
       .def("timeline_save",
@@ -374,22 +391,36 @@ void export_lang(py::module &m) {
            [](Program *program, int n, int m, uint64 max_num_entries,
               DataType dtype, const std::string &storage_format) {
              TI_ERROR_IF(!arch_is_cpu(program->config.arch),
-                         "SparseMatrix only supports CPU for now.");
+                         "SparseMatrix Builder only supports CPU for now.");
              return SparseMatrixBuilder(n, m, max_num_entries, dtype,
                                         storage_format);
            })
       .def("create_sparse_matrix",
            [](Program *program, int n, int m, DataType dtype,
               std::string storage_format) {
-             TI_ERROR_IF(!arch_is_cpu(program->config.arch),
-                         "SparseMatrix only supports CPU for now.");
-             return make_sparse_matrix(n, m, dtype, storage_format);
+             TI_ERROR_IF(!arch_is_cpu(program->config.arch) &&
+                             !arch_is_cuda(program->config.arch),
+                         "SparseMatrix only supports CPU and CUDA for now.");
+             if (arch_is_cpu(program->config.arch))
+               return make_sparse_matrix(n, m, dtype, storage_format);
+             else
+               return make_cu_sparse_matrix(n, m, dtype);
            })
       .def("make_sparse_matrix_from_ndarray",
            [](Program *program, SparseMatrix &sm, const Ndarray &ndarray) {
-             TI_ERROR_IF(!arch_is_cpu(program->config.arch),
-                         "SparseMatrix only supports CPU for now.");
+             TI_ERROR_IF(!arch_is_cpu(program->config.arch) &&
+                             !arch_is_cuda(program->config.arch),
+                         "SparseMatrix only supports CPU and CUDA for now.");
              return make_sparse_matrix_from_ndarray(program, sm, ndarray);
+           })
+      .def("make_sparse_matrix_from_ndarray_cusparse",
+           [](Program *program, CuSparseMatrix &sm, const Ndarray &row_coo,
+              const Ndarray &col_coo, const Ndarray &val_coo) {
+             TI_ERROR_IF(
+                 !arch_is_cuda(program->config.arch),
+                 "SparseMatrix based on GPU only supports CUDA for now.");
+             return make_sparse_matrix_from_ndarray_cusparse(
+                 program, sm, row_coo, col_coo, val_coo);
            })
       .def("no_activate",
            [](Program *program, SNode *snode) {
@@ -398,15 +429,19 @@ void export_lang(py::module &m) {
              TI_ASSERT(kernel);
              kernel->no_activate.push_back(snode);
            })
-      .def("decl_arg",
-           [&](Program *program, const DataType &dt, bool is_array) {
-             return program->current_callable->insert_arg(dt, is_array);
+      .def("decl_scalar_arg",
+           [&](Program *program, const DataType &dt) {
+             return program->current_callable->insert_scalar_arg(dt);
            })
       .def("decl_arr_arg",
            [&](Program *program, const DataType &dt, int total_dim,
                std::vector<int> shape) {
              return program->current_callable->insert_arr_arg(dt, total_dim,
                                                               shape);
+           })
+      .def("decl_texture_arg",
+           [&](Program *program, const DataType &dt) {
+             return program->current_callable->insert_texture_arg(dt);
            })
       .def("decl_ret",
            [&](Program *program, const DataType &dt) {
@@ -420,12 +455,10 @@ void export_lang(py::module &m) {
           "create_ndarray",
           [&](Program *program, const DataType &dt,
               const std::vector<int> &shape,
-              const std::vector<int> &element_shape,
               ExternalArrayLayout layout) -> Ndarray * {
-            return program->create_ndarray(dt, shape, element_shape, layout);
+            return program->create_ndarray(dt, shape, layout);
           },
           py::arg("dt"), py::arg("shape"),
-          py::arg("element_shape") = py::tuple(),
           py::arg("layout") = ExternalArrayLayout::kNull,
           py::return_value_policy::reference)
       .def(
@@ -504,10 +537,14 @@ void export_lang(py::module &m) {
           [](SNode *snode, int i) -> SNode * { return snode->ch[i].get(); },
           py::return_value_policy::reference)
       .def("lazy_grad", &SNode::lazy_grad)
+      .def("lazy_dual", &SNode::lazy_dual)
+      .def("allocate_adjoint_checkbit", &SNode::allocate_adjoint_checkbit)
       .def("read_int", &SNode::read_int)
       .def("read_uint", &SNode::read_uint)
       .def("read_float", &SNode::read_float)
       .def("has_adjoint", &SNode::has_adjoint)
+      .def("has_adjoint_checkbit", &SNode::has_adjoint_checkbit)
+      .def("get_snode_grad_type", &SNode::get_snode_grad_type)
       .def("has_dual", &SNode::has_dual)
       .def("is_primal", &SNode::is_primal)
       .def("is_place", &SNode::is_place)
@@ -543,8 +580,9 @@ void export_lang(py::module &m) {
       .def("write_int", &Ndarray::write_int)
       .def("write_float", &Ndarray::write_float)
       .def("total_shape", &Ndarray::total_shape)
+      .def("element_shape", &Ndarray::get_element_shape)
+      .def("element_data_type", &Ndarray::get_element_data_type)
       .def_readonly("dtype", &Ndarray::dtype)
-      .def_readonly("element_shape", &Ndarray::element_shape)
       .def_readonly("shape", &Ndarray::shape);
 
   py::class_<Texture>(m, "Texture")
@@ -638,6 +676,12 @@ void export_lang(py::module &m) {
             } else if (expected_dtype == PrimitiveType::u16) {
               args.insert(
                   {arg_name, aot::IValue::create(py::cast<uint16>(it.second))});
+            } else if (expected_dtype == PrimitiveType::u8) {
+              args.insert({arg_name,
+                           aot::IValue::create(py::cast<uint8_t>(it.second))});
+            } else if (expected_dtype == PrimitiveType::i8) {
+              args.insert(
+                  {arg_name, aot::IValue::create(py::cast<int8_t>(it.second))});
             } else {
               TI_NOT_IMPLEMENTED;
             }
@@ -697,20 +741,21 @@ void export_lang(py::module &m) {
            [](Expr *expr) { return expr->is<ExternalTensorExpression>(); })
       .def("is_primal",
            [](Expr *expr) {
-             return expr->cast<GlobalVariableExpression>()->is_primal;
+             return expr->cast<GlobalVariableExpression>()->snode_grad_type ==
+                    SNodeGradType::kPrimal;
            })
       .def("set_tb", &Expr::set_tb)
       .def("set_name",
            [&](Expr *expr, std::string na) {
              expr->cast<GlobalVariableExpression>()->name = na;
            })
-      .def("set_is_primal",
-           [&](Expr *expr, bool v) {
-             expr->cast<GlobalVariableExpression>()->is_primal = v;
+      .def("set_grad_type",
+           [&](Expr *expr, SNodeGradType t) {
+             expr->cast<GlobalVariableExpression>()->snode_grad_type = t;
            })
       .def("set_adjoint", &Expr::set_adjoint)
+      .def("set_adjoint_checkbit", &Expr::set_adjoint_checkbit)
       .def("set_dual", &Expr::set_dual)
-      .def("set_attribute", &Expr::set_attribute)
       .def(
           "get_dt",
           [&](Expr *expr) -> const Type * {
@@ -723,7 +768,6 @@ void export_lang(py::module &m) {
            [](Expr *expr) {
              return expr->cast<GlobalVariableExpression>()->name;
            })
-      .def("get_attribute", &Expr::get_attribute)
       .def("get_raw_address", [](Expr *expr) { return (uint64)expr; })
       .def("get_underlying_ptr_address", [](Expr *e) {
         // The reason that there are both get_raw_address() and
@@ -743,22 +787,10 @@ void export_lang(py::module &m) {
 
   py::class_<Stmt>(m, "Stmt");
 
-  m.def("expr_get_addr", [](SNode *snode, const ExprGroup &indices) {
-    return Expr::make<SNodeOpExpression>(snode, SNodeOpType::get_addr, indices);
-  });
-
-  m.def("insert_append",
-        [](SNode *snode, const ExprGroup &indices, const Expr &val) {
-          return snode_append(snode, indices, val);
-        });
-
-  m.def("insert_is_active", [](SNode *snode, const ExprGroup &indices) {
-    return snode_is_active(snode, indices);
-  });
-
-  m.def("insert_len", [](SNode *snode, const ExprGroup &indices) {
-    return snode_length(snode, indices);
-  });
+  m.def("expr_snode_get_addr", &snode_get_addr);
+  m.def("expr_snode_append", &snode_append);
+  m.def("expr_snode_is_active", &snode_is_active);
+  m.def("expr_snode_length", &snode_length);
 
   m.def("insert_internal_func_call",
         [&](const std::string &func_name, const ExprGroup &args,
@@ -928,22 +960,33 @@ void export_lang(py::module &m) {
   m.def("is_unsigned", is_unsigned);
 
   m.def("global_new", static_cast<Expr (*)(Expr, DataType)>(global_new));
-  m.def("set_global_grad", [&](const Expr &expr) {
-    TI_ASSERT(expr.is<GlobalVariableExpression>());
-    expr.cast<GlobalVariableExpression>()->is_primal = false;
-  });
+
   m.def("data_type_name", data_type_name);
 
-  m.def("subscript", [](const Expr &expr, const ExprGroup &expr_group) {
-    return expr[expr_group];
-  });
+  m.def("subscript",
+        [](const Expr &expr, const ExprGroup &expr_group, std::string tb) {
+          Expr idx_expr = expr[expr_group];
+          idx_expr.set_tb(tb);
+          return idx_expr;
+        });
 
-  m.def("make_index_expr",
-        Expr::make<IndexExpression, const Expr &, const ExprGroup &>);
+  m.def("make_index_expr", Expr::make<IndexExpression, const Expr &,
+                                      const ExprGroup &, std::string>);
 
   m.def("make_stride_expr",
         Expr::make<StrideExpression, const Expr &, const ExprGroup &,
                    const std::vector<int> &, int>);
+
+  m.def("get_external_tensor_element_dim", [](const Expr &expr) {
+    TI_ASSERT(expr.is<ExternalTensorExpression>());
+    return expr.cast<ExternalTensorExpression>()->element_dim;
+  });
+
+  m.def("get_external_tensor_element_shape", [](const Expr &expr) {
+    TI_ASSERT(expr.is<ExternalTensorExpression>());
+    auto external_tensor_expr = expr.cast<ExternalTensorExpression>();
+    return external_tensor_expr->dt.get_shape();
+  });
 
   m.def("get_external_tensor_dim", [](const Expr &expr) {
     TI_ASSERT(expr.is<ExternalTensorExpression>());
@@ -1076,7 +1119,14 @@ void export_lang(py::module &m) {
            py::return_value_policy::reference)
       .def("get_quant_float_type", &TypeFactory::get_quant_float_type,
            py::arg("digits_type"), py::arg("exponent_type"),
-           py::arg("compute_type"), py::return_value_policy::reference);
+           py::arg("compute_type"), py::return_value_policy::reference)
+      .def(
+          "get_tensor_type",
+          [&](TypeFactory *factory, std::vector<int> shape,
+              const DataType &element_type) {
+            return factory->create_tensor_type(shape, element_type);
+          },
+          py::return_value_policy::reference);
 
   m.def("get_type_factory_instance", TypeFactory::get_instance,
         py::return_value_policy::reference);
@@ -1091,11 +1141,6 @@ void export_lang(py::module &m) {
       .def("add_member", &BitStructTypeBuilder::add_member)
       .def("build", &BitStructTypeBuilder::build,
            py::return_value_policy::reference);
-
-  m.def("decl_tensor_type",
-        [&](std::vector<int> shape, const DataType &element_type) {
-          return TypeFactory::create_tensor_type(shape, element_type);
-        });
 
   py::class_<SNodeRegistry>(m, "SNodeRegistry")
       .def(py::init<>())
@@ -1161,14 +1206,20 @@ void export_lang(py::module &m) {
   MAKE_SPARSE_MATRIX(64, ColMajor, d);
   MAKE_SPARSE_MATRIX(64, RowMajor, d);
 
+  py::class_<CuSparseMatrix, SparseMatrix>(m, "CuSparseMatrix")
+      .def(py::init<int, int, DataType>())
+      .def("spmv", &CuSparseMatrix::spmv);
+
   py::class_<SparseSolver>(m, "SparseSolver")
       .def("compute", &SparseSolver::compute)
       .def("analyze_pattern", &SparseSolver::analyze_pattern)
       .def("factorize", &SparseSolver::factorize)
       .def("solve", &SparseSolver::solve)
+      .def("solve_cu", &SparseSolver::solve_cu)
       .def("info", &SparseSolver::info);
 
   m.def("make_sparse_solver", &make_sparse_solver);
+  m.def("make_cusparse_solver", &make_cusparse_solver);
 
   // Mesh Class
   // Mesh related.

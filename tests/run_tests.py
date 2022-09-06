@@ -1,7 +1,9 @@
 import argparse
+import atexit
 import os
 import pdb
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -75,12 +77,12 @@ def _test_cpp():
                                       __capi_aot_test_cases)
     _run_cpp_test(capi_test_filename, build_dir, exclude_tests_cmd)
 
-    # Run AOT test cases
-    exclude_tests_cmd = _test_cpp_aot(cpp_test_filename, build_dir,
-                                      __aot_test_cases)
+    # # Run AOT test cases
+    # exclude_tests_cmd = _test_cpp_aot(cpp_test_filename, build_dir,
+    #                                   __aot_test_cases)
 
-    # Run rest of the cpp tests
-    _run_cpp_test(cpp_test_filename, build_dir, exclude_tests_cmd)
+    # # Run rest of the cpp tests
+    # _run_cpp_test(cpp_test_filename, build_dir, exclude_tests_cmd)
 
 
 def _test_python(args):
@@ -266,7 +268,22 @@ def test():
                         action='store_true',
                         default=False,
                         help='Show AOT test programming guide')
+    parser.add_argument('--with-offline-cache',
+                        action='store_true',
+                        default=os.environ.get('TI_TEST_OFFLINE_CACHE',
+                                               '0') == '1',
+                        dest='with_offline_cache',
+                        help='Run tests with offline_cache=True')
+    parser.add_argument(
+        '--rerun-with-offline-cache',
+        type=int,
+        dest='rerun_with_offline_cache',
+        default=1,
+        help=
+        'Rerun all tests with offline_cache=True for given times, together with --with-offline-cache'
+    )
 
+    run_count = 1
     args = parser.parse_args()
     print(args)
 
@@ -281,12 +298,43 @@ def test():
         print(f'Running on Arch={arch}')
         os.environ['TI_WANTED_ARCHS'] = arch
 
+    if args.with_offline_cache:
+        run_count += args.rerun_with_offline_cache
+        args.timeout *= run_count
+        tmp_cache_file_path = tempfile.mkdtemp()
+        os.environ['TI_OFFLINE_CACHE'] = '1'
+        os.environ['TI_OFFLINE_CACHE_FILE_PATH'] = tmp_cache_file_path
+        if not os.environ.get('TI_OFFLINE_CACHE_CLEANING_POLICY'):
+            os.environ['TI_OFFLINE_CACHE_CLEANING_POLICY'] = 'never'
+
+        def print_and_remove():
+            def size_of_dir(dir):
+                size = 0
+                for root, dirs, files in os.walk(dir):
+                    size += sum([
+                        os.path.getsize(os.path.join(root, name))
+                        for name in files
+                    ])
+                return size
+
+            n = len(os.listdir(tmp_cache_file_path))
+            size = size_of_dir(tmp_cache_file_path)
+            shutil.rmtree(tmp_cache_file_path)
+            print('Summary of testing the offline cache:')
+            print(f'    The number of cache files: {n}')
+            print(f'    Size of cache files:       {size / 1024:.2f} KB')
+
+        atexit.register(print_and_remove)
+    else:  # Default: disable offline cache
+        os.environ['TI_OFFLINE_CACHE'] = '0'
+
     if args.cpp:
         _test_cpp()
         return
 
-    if _test_python(args) != 0:
-        exit(1)
+    for _ in range(run_count):
+        if _test_python(args) != 0:
+            exit(1)
 
 
 if __name__ == '__main__':

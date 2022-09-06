@@ -30,6 +30,18 @@ if (TI_WITH_METAL)
   )
 endif()
 
+if (TI_WITH_VULKAN OR TI_WITH_OPENGL)
+  target_link_libraries(${EXAMPLES_NAME} PRIVATE gfx_runtime)
+endif()
+
+if (TI_WITH_VULKAN)
+  target_link_libraries(${EXAMPLES_NAME} PRIVATE vulkan_rhi)
+endif()
+
+if (TI_WITH_OPENGL)
+  target_link_libraries(${EXAMPLES_NAME} PRIVATE opengl_rhi)
+endif()
+
 # TODO 4832: be specific on the header dependencies here, e.g., ir
 target_include_directories(${EXAMPLES_NAME}
   PRIVATE

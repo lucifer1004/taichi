@@ -8,7 +8,7 @@
 #include "taichi/common/serialization.h"
 #include "taichi/runtime/llvm/launch_arg_info.h"
 #include "taichi/program/kernel.h"
-#include "taichi/util/io.h"
+#include "taichi/util/offline_cache.h"
 #include "taichi/codegen/llvm/llvm_compiled_data.h"
 
 namespace taichi {
@@ -91,6 +91,8 @@ struct LlvmOfflineCache {
     // other
   };
 
+  using KernelMetadata = KernelCacheData;  // Required by CacheCleaner
+
   Version version{};
   std::size_t size{0};  // byte
 
@@ -122,7 +124,8 @@ class LlvmOfflineCacheFileReader {
       LlvmOfflineCache::Format format = LlvmOfflineCache::Format::LL);
 
   static bool load_meta_data(LlvmOfflineCache &data,
-                             const std::string &cache_file_path);
+                             const std::string &cache_file_path,
+                             bool with_lock = true);
 
  private:
   LlvmOfflineCacheFileReader(const std::string &path,
@@ -139,20 +142,8 @@ class LlvmOfflineCacheFileReader {
 };
 
 class LlvmOfflineCacheFileWriter {
-  enum CleanCacheFlags {
-    NotClean = 0b000,
-    CleanOldVersion = 0b001,
-    CleanOldUsed = 0b010,
-    CleanOldCreated = 0b100
-  };
-
  public:
-  enum CleanCachePolicy {
-    Never = NotClean,
-    OnlyOldVersion = CleanOldVersion,
-    LRU = CleanOldVersion | CleanOldUsed,
-    FIFO = CleanOldVersion | CleanOldCreated
-  };
+  using CleanCachePolicy = offline_cache::CleanCachePolicy;
 
   void set_data(LlvmOfflineCache &&data) {
     this->mangled_ = false;
@@ -180,8 +171,6 @@ class LlvmOfflineCacheFileWriter {
                           CleanCachePolicy policy,
                           int max_bytes,
                           double cleaning_factor);
-
-  static CleanCachePolicy string_to_clean_cache_policy(const std::string &str);
 
  private:
   void merge_with(LlvmOfflineCache &&data);

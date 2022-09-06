@@ -46,7 +46,6 @@ LlvmRuntimeExecutor::LlvmRuntimeExecutor(CompileConfig &config,
       TI_WARN("Falling back to {}.", arch_name(host_arch()));
     }
   }
-
   snode_tree_buffer_manager_ = std::make_unique<SNodeTreeBufferManager>(this);
   thread_pool_ = std::make_unique<ThreadPool>(config.cpu_max_num_threads);
   preallocated_device_buffer_ = nullptr;
@@ -84,6 +83,11 @@ LlvmRuntimeExecutor::LlvmRuntimeExecutor(CompileConfig &config,
       config.saturating_grid_dim = num_SMs * query_max_block_per_sm * 2;
     }
 #endif
+  } else if (config.arch == Arch::dx12) {
+#if defined(TI_WITH_DX12)
+    // FIXME: set value based on DX12.
+    config.max_block_dim = 1024;
+#endif
   }
 
   if (arch_is_cpu(config.arch)) {
@@ -106,6 +110,18 @@ LlvmRuntimeExecutor::LlvmRuntimeExecutor(CompileConfig &config,
     device_ = std::make_shared<cuda::CudaDevice>();
 
     this->maybe_initialize_cuda_llvm_context();
+  }
+#endif
+
+#ifdef TI_WITH_DX12
+  if (config.arch == Arch::dx12) {
+    // FIXME: add dx12 device.
+    device_ = std::make_shared<cpu::CpuDevice>();
+
+    llvm_context_device_ =
+        std::make_unique<TaichiLLVMContext>(config_, Arch::dx12);
+    // FIXME: add dx12 JIT.
+    // llvm_context_device_->init_runtime_jit_module();
   }
 #endif
 
@@ -160,6 +176,7 @@ void LlvmRuntimeExecutor::print_list_manager_info(void *list_manager,
 void LlvmRuntimeExecutor::synchronize() {
   if (config_->arch == Arch::cuda) {
 #if defined(TI_WITH_CUDA)
+    CUDAContext::get_instance().make_current();
     CUDADriver::get_instance().stream_synchronize(nullptr);
 #else
     TI_ERROR("No CUDA support");
@@ -174,6 +191,7 @@ uint64 LlvmRuntimeExecutor::fetch_result_uint64(int i, uint64 *result_buffer) {
   uint64 ret;
   if (config_->arch == Arch::cuda) {
 #if defined(TI_WITH_CUDA)
+    CUDAContext::get_instance().make_current();
     CUDADriver::get_instance().memcpy_device_to_host(&ret, result_buffer + i,
                                                      sizeof(uint64));
 #else
@@ -594,10 +612,15 @@ void LlvmRuntimeExecutor::materialize_runtime(MemoryPool *memory_pool,
         "LLVMRuntime_set_profiler_stop", llvm_runtime_,
         (void *)&KernelProfilerBase::profiler_stop);
   }
+#if defined(TI_WITH_CUDA)
+  if (config_->arch == Arch::cuda) {
+    CUDADriver::get_instance().context_pop_current(nullptr);
+  }
+#endif
 }
 
 void LlvmRuntimeExecutor::destroy_snode_tree(SNodeTree *snode_tree) {
-  get_llvm_context(host_arch())
+  get_llvm_context(config_->arch)
       ->delete_functions_of_snode_tree(snode_tree->id());
   snode_tree_buffer_manager_->destroy(snode_tree);
 }

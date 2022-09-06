@@ -2,13 +2,36 @@ cmake_minimum_required(VERSION 3.0)
 
 set(TAICHI_C_API_NAME taichi_c_api)
 
-file(GLOB_RECURSE C_API_SOURCE "c_api/src/*.cpp")
-if(NOT TI_BUILD_TESTS)
-    list(REMOVE_ITEM C_API_SOURCE "c_api/src/c_api_test_utils.cpp")
+file(GLOB_RECURSE C_API_SOURCE "c_api/src/taichi_core_impl.cpp")
+
+if (TI_WITH_LLVM)
+  list(APPEND C_API_SOURCE "c_api/src/taichi_llvm_impl.cpp")
+endif()
+
+if (TI_WITH_OPENGL OR TI_WITH_VULKAN)
+  list(APPEND C_API_SOURCE "c_api/src/taichi_gfx_impl.cpp")
+endif()
+
+if (TI_WITH_OPENGL)
+  list(APPEND C_API_SOURCE "c_api/src/taichi_opengl_impl.cpp")
+endif()
+
+if (TI_WITH_VULKAN)
+  list(APPEND C_API_SOURCE "c_api/src/taichi_vulkan_impl.cpp")
+endif()
+
+if(TI_BUILD_TESTS)
+  list(APPEND C_API_SOURCE "c_api/src/c_api_test_utils.cpp")
 endif()
 
 add_library(${TAICHI_C_API_NAME} SHARED ${C_API_SOURCE})
 target_link_libraries(${TAICHI_C_API_NAME} PRIVATE taichi_core)
+
+# [TODO] Remove the following two linkages after rewriting AOT Demos with Device APIS
+if(TI_WITH_GGUI)
+target_link_libraries(${TAICHI_C_API_NAME} PRIVATE taichi_ui_vulkan)
+target_link_libraries(${TAICHI_C_API_NAME} PRIVATE taichi_ui)
+endif()
 
 set(C_API_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/build")
 set_target_properties(${TAICHI_C_API_NAME} PROPERTIES
@@ -31,6 +54,8 @@ target_include_directories(${TAICHI_C_API_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/external/VulkanMemoryAllocator/include
         ${CMAKE_CURRENT_SOURCE_DIR}/external/SPIRV-Tools/include
         ${CMAKE_CURRENT_SOURCE_DIR}/external/volk
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/glad/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/glfw/include
     )
 
 # This helper provides us standard locations across Linux/Windows/MacOS
@@ -43,7 +68,6 @@ install(TARGETS ${TAICHI_C_API_NAME} EXPORT ${TAICHI_C_API_NAME}Targets
     INCLUDES DESTINATION c_api/include
     )
 
-message( --------------------- ${CMAKE_INSTALL_LIBDIR})
 # Install the export set, which contains the meta data of the target
 install(EXPORT ${TAICHI_C_API_NAME}Targets
     FILE ${TAICHI_C_API_NAME}Targets.cmake

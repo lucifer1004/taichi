@@ -231,7 +231,7 @@ def test_mpm88_aot():
             json.load(json_file)
 
 
-@test_utils.test(arch=ti.opengl)
+@test_utils.test(arch=[ti.opengl, ti.vulkan])
 def test_opengl_8_ssbo():
     # 6 ndarrays + gtmp + args
     n = 4
@@ -262,40 +262,6 @@ def test_opengl_8_ssbo():
     assert (density4.to_numpy() == (np.zeros(shape=(n, n)) + 4)).all()
     assert (density5.to_numpy() == (np.zeros(shape=(n, n)) + 5)).all()
     assert (density6.to_numpy() == (np.zeros(shape=(n, n)) + 6)).all()
-
-
-@test_utils.test(arch=ti.opengl)
-def test_opengl_exceed_max_ssbo():
-    # 8 ndarrays + args > 8 (maximum allowed)
-    n = 4
-    density1 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density2 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density3 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density4 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density5 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density6 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density7 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-    density8 = ti.ndarray(dtype=ti.f32, shape=(n, n))
-
-    @ti.kernel
-    def init(d: ti.i32, density1: ti.types.ndarray(),
-             density2: ti.types.ndarray(), density3: ti.types.ndarray(),
-             density4: ti.types.ndarray(), density5: ti.types.ndarray(),
-             density6: ti.types.ndarray(), density7: ti.types.ndarray(),
-             density8: ti.types.ndarray()):
-        for i, j in density1:
-            density1[i, j] = d + 1
-            density2[i, j] = d + 2
-            density3[i, j] = d + 3
-            density4[i, j] = d + 4
-            density5[i, j] = d + 5
-            density6[i, j] = d + 6
-            density7[i, j] = d + 7
-            density8[i, j] = d + 8
-
-    with pytest.raises(RuntimeError):
-        init(0, density1, density2, density3, density4, density5, density6,
-             density7, density8)
 
 
 @test_utils.test(arch=[ti.opengl, ti.vulkan])
@@ -446,7 +412,7 @@ def test_mpm99_aot():
             json.load(json_file)
 
 
-@test_utils.test(arch=ti.opengl)
+@test_utils.test(arch=[ti.opengl, ti.vulkan])
 def test_mpm88_ndarray():
     dim = 2
     N = 64
@@ -540,7 +506,7 @@ def test_mpm88_ndarray():
             json.load(json_file)
 
 
-@test_utils.test(arch=ti.opengl)
+@test_utils.test(arch=[ti.opengl, ti.vulkan])
 def test_aot_ndarray_template_mixed():
     @ti.kernel
     def run(arr: ti.types.ndarray(), val1: ti.f32, val2: ti.template()):
@@ -558,7 +524,7 @@ def test_aot_ndarray_template_mixed():
             assert args_count == 2, res  # `arr` and `val1`
 
 
-@test_utils.test(arch=[ti.vulkan])
+@test_utils.test(arch=[ti.opengl, ti.vulkan])
 def test_archive():
     density = ti.field(float, shape=(4, 4))
 
@@ -577,3 +543,55 @@ def test_archive():
         with zipfile.ZipFile(tcm_path, 'r') as z:
             assert z.read("__version__") == bytes(
                 '.'.join(str(x) for x in ti.__version__), 'utf-8')
+
+
+@test_utils.test(arch=[ti.opengl, ti.vulkan])
+def test_sequential_dispatch():
+    g_init_builder = ti.graph.GraphBuilder()
+    g_init_substep = g_init_builder.create_sequential()
+
+    ivec3 = ti.types.vector(3, ti.i32)
+
+    @ti.kernel
+    def init_data(test_vec: ivec3):
+        pass
+
+    sym_args = ti.graph.Arg(ti.graph.ArgKind.MATRIX, 'test_arg',
+                            ti.types.vector(3, ti.i32))
+
+    g_init_substep.dispatch(init_data, sym_args)
+    g_init_builder.append(g_init_substep)
+
+    g_init = g_init_builder.compile()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # note ti.aot.Module(ti.opengl) is no-op according to its docstring.
+        m = ti.aot.Module(ti.lang.impl.current_cfg().arch)
+        m.add_graph("g_init", g_init)
+        m.save(tmpdir, '')
+        with open(os.path.join(tmpdir, 'metadata.json'), "r") as json_file:
+            json.load(json_file)
+
+
+@test_utils.test(arch=[ti.vulkan])
+def test_vulkan_cgraph_short():
+    a = ti.ndarray(ti.u8, shape=(16))
+    c = 2
+
+    @ti.kernel
+    def test(a: ti.types.ndarray(), c: ti.u8):
+        for i in a:
+            a[i] = i + c
+
+    sym_a = ti.graph.Arg(ti.graph.ArgKind.NDARRAY, 'a', ti.u8, field_dim=1)
+    sym_c = ti.graph.Arg(ti.graph.ArgKind.SCALAR, 'c', ti.u8)
+    g_init = ti.graph.GraphBuilder()
+    g_init.dispatch(test, sym_a, sym_c)
+    g = g_init.compile()
+
+    g.run({'a': a, 'c': c})
+
+    m = ti.aot.Module(ti.lang.impl.current_cfg().arch)
+    m.add_graph('g_init', g)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        m.save(tmpdir, '')

@@ -107,7 +107,7 @@ class KernelProfiler:
         #sync first
         impl.get_runtime().prog.sync_kernel_profiler()
         #then clear backend & frontend info
-        impl.get_runtime().prog.clear_kernel_profile_info()
+        impl.get_runtime().prog.clear_kernel_profiler()
         self._clear_frontend()
 
         return None
@@ -199,6 +199,7 @@ class KernelProfiler:
     def _update_records(self):
         """Acquires kernel records from a backend."""
         impl.get_runtime().prog.sync_kernel_profiler()
+        impl.get_runtime().prog.update_kernel_profiler()
         self._clear_frontend()
         self._traced_records = impl.get_runtime(
         ).prog.get_kernel_profiler_records()
@@ -318,7 +319,7 @@ class KernelProfiler:
                     record.active_blocks_per_multiprocessor
                 ]
             for idx in range(values_num):
-                formatted_str += metric_list[idx].format + '|'
+                formatted_str += metric_list[idx].val_format + '|'
                 values += [record.metric_values[idx] * metric_list[idx].scale]
             formatted_str = (formatted_str + '] ' + record.name)
             string_list.append(formatted_str.replace("|]", "]"))
@@ -523,7 +524,7 @@ def set_kernel_profiler_metrics(metric_list=default_cupti_metrics):
         >>> profiling_metrics += [global_op_atom]
 
         >>> # metrics setting will be retained until the next configuration
-        >>> ti.profiler.set_kernel_profile_metrics(profiling_metrics)
+        >>> ti.profiler.set_kernel_profiler_metrics(profiling_metrics)
         >>> for i in range(16):
         >>>     reduction()
         >>> ti.profiler.print_kernel_profiler_info('trace')

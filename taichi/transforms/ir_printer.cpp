@@ -34,17 +34,6 @@ std::string block_dim_info(int block_dim) {
          (block_dim == 0 ? "adaptive" : std::to_string(block_dim)) + " ";
 }
 
-std::string to_string(const LaneAttribute<LocalAddress> &ptr) {
-  std::string ret = " [";
-  for (int i = 0; i < (int)ptr.size(); i++) {
-    ret += fmt::format("{}[{}]", ptr[i].var->name(), ptr[i].offset);
-    if (i + 1 < (int)ptr.size())
-      ret += ", ";
-  }
-  ret += "]";
-  return ret;
-}
-
 class IRPrinter : public IRVisitor {
  private:
   ExpressionPrinter *expr_printer_{nullptr};
@@ -289,8 +278,7 @@ class IRPrinter : public IRVisitor {
 
   void visit(ConstStmt *const_stmt) override {
     print("{}{} = const {}", const_stmt->type_hint(), const_stmt->name(),
-          const_stmt->val.serialize(
-              [](const TypedConstant &t) { return t.stringify(); }, "["));
+          const_stmt->val.stringify());
   }
 
   void visit(WhileControlStmt *stmt) override {
@@ -391,18 +379,13 @@ class IRPrinter : public IRVisitor {
     std::string s =
         fmt::format("{}{} = global ptr [", stmt->type_hint(), stmt->name());
 
-    for (int l = 0; l < stmt->width(); l++) {
-      std::string snode_name;
-      if (stmt->snodes[l]) {
-        snode_name = stmt->snodes[l]->get_node_type_name_hinted();
-      } else {
-        snode_name = "unknown";
-      }
-      s += snode_name;
-      if (l + 1 < stmt->width()) {
-        s += ", ";
-      }
+    std::string snode_name;
+    if (stmt->snode) {
+      snode_name = stmt->snode->get_node_type_name_hinted();
+    } else {
+      snode_name = "unknown";
     }
+    s += snode_name;
     s += "], index [";
     for (int i = 0; i < (int)stmt->indices.size(); i++) {
       s += fmt::format("{}", stmt->indices[i]->name());
@@ -450,7 +433,7 @@ class IRPrinter : public IRVisitor {
 
   void visit(LocalLoadStmt *stmt) override {
     print("{}{} = local load [{}]", stmt->type_hint(), stmt->name(),
-          to_string(stmt->src));
+          stmt->src->name());
   }
 
   void visit(LocalStoreStmt *stmt) override {
@@ -466,13 +449,6 @@ class IRPrinter : public IRVisitor {
   void visit(GlobalStoreStmt *stmt) override {
     print("{}{} : global store [{} <- {}]", stmt->type_hint(), stmt->name(),
           stmt->dest->name(), stmt->val->name());
-  }
-
-  void visit(ElementShuffleStmt *stmt) override {
-    print("{}{} = shuffle {}", stmt->type_hint(), stmt->name(),
-          stmt->elements.serialize([](const VectorElement &ve) {
-            return fmt::format("{}[{}]", ve.stmt->name(), ve.index);
-          }));
   }
 
   void visit(RangeAssumptionStmt *stmt) override {
@@ -540,14 +516,8 @@ class IRPrinter : public IRVisitor {
   }
 
   void visit(ExternalPtrStmt *stmt) override {
-    std::string s = "<";
-    for (int i = 0; i < (int)stmt->base_ptrs.size(); i++) {
-      s += fmt::format("{}", stmt->base_ptrs[i]->name());
-      if (i + 1 < (int)stmt->base_ptrs.size()) {
-        s += ", ";
-      }
-    }
-    s += ">, [";
+    std::string s = stmt->base_ptr->name();
+    s += ", [";
     for (int i = 0; i < (int)stmt->indices.size(); i++) {
       s += fmt::format("{}", stmt->indices[i]->name());
       if (i + 1 < (int)stmt->indices.size()) {
@@ -792,6 +762,19 @@ class IRPrinter : public IRVisitor {
 
   void visit(ReferenceStmt *stmt) override {
     print("{}{} = ref({})", stmt->type_hint(), stmt->name(), stmt->var->name());
+  }
+
+  void visit(MatrixInitStmt *stmt) override {
+    std::string result = "";
+    result += fmt::format("{}{} = [", stmt->type_hint(), stmt->name());
+    for (int i = 0; i < stmt->values.size(); ++i) {
+      result += stmt->values[i]->name();
+      if (i != stmt->values.size() - 1) {
+        result += ", ";
+      }
+    }
+    result += "]";
+    print(result);
   }
 
  private:

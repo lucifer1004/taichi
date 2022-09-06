@@ -11,42 +11,26 @@ namespace lang {
 
 constexpr size_t kBufferSizeEntireSize = size_t(-1);
 
+#define MAKE_ENUM_FLAGS(name)                  \
+  inline name operator|(name a, name b) {      \
+    return static_cast<name>(int(a) | int(b)); \
+  }                                            \
+  inline name operator&(name a, name b) {      \
+    return static_cast<name>(int(a) & int(b)); \
+  }                                            \
+  inline bool operator&&(name a, name b) {     \
+    return (int(a) & int(b)) != 0;             \
+  }
+
 // For backend dependent code (e.g. codegen)
 // Or the backend runtime itself
 // Capabilities are per-device
 enum class DeviceCapability : uint32_t {
-  // Vulkan Caps
-  vk_api_version,
-  vk_has_physical_features2,
-  vk_has_external_memory,
-  vk_has_surface,
-  vk_has_presentation,
-  // SPIR-V Caps
-  spirv_version,
-  spirv_has_int8,
-  spirv_has_int16,
-  spirv_has_int64,
-  spirv_has_float16,
-  spirv_has_float64,
-  spirv_has_atomic_i64,
-  spirv_has_atomic_float16,  // load, store, exchange
-  spirv_has_atomic_float16_add,
-  spirv_has_atomic_float16_minmax,
-  spirv_has_atomic_float,  // load, store, exchange
-  spirv_has_atomic_float_add,
-  spirv_has_atomic_float_minmax,
-  spirv_has_atomic_float64,  // load, store, exchange
-  spirv_has_atomic_float64_add,
-  spirv_has_atomic_float64_minmax,
-  spirv_has_variable_ptr,
-  spirv_has_physical_storage_buffer,
-  spirv_has_subgroup_basic,
-  spirv_has_subgroup_vote,
-  spirv_has_subgroup_arithmetic,
-  spirv_has_subgroup_ballot,
-  // Graphics Caps,
-  wide_lines
+#define PER_DEVICE_CAPABILITY(name) name,
+#include "taichi/inc/rhi_constants.inc.h"
+#undef PER_DEVICE_CAPABILITY
 };
+const std::string to_string(DeviceCapability c);
 
 enum class BlendOp : uint32_t { add, subtract, reverse_subtract, min, max };
 
@@ -200,51 +184,14 @@ enum class PolygonMode : int {
 };
 
 enum class TI_DLL_EXPORT BufferFormat : uint32_t {
-  r8,
-  rg8,
-  rgba8,
-  rgba8srgb,
-  bgra8,
-  bgra8srgb,
-  r8u,
-  rg8u,
-  rgba8u,
-  r8i,
-  rg8i,
-  rgba8i,
-  r16,
-  rg16,
-  rgb16,
-  rgba16,
-  r16u,
-  rg16u,
-  rgb16u,
-  rgba16u,
-  r16i,
-  rg16i,
-  rgb16i,
-  rgba16i,
-  r16f,
-  rg16f,
-  rgb16f,
-  rgba16f,
-  r32u,
-  rg32u,
-  rgb32u,
-  rgba32u,
-  r32i,
-  rg32i,
-  rgb32i,
-  rgba32i,
-  r32f,
-  rg32f,
-  rgb32f,
-  rgba32f,
-  depth16,
-  depth24stencil8,
-  depth32f,
-  unknown
+#define PER_BUFFER_FORMAT(x) x,
+#include "taichi/inc/rhi_constants.inc.h"
+#undef PER_BUFFER_FORMAT
 };
+
+std::pair<DataType, uint32_t> buffer_format2type_channels(BufferFormat format);
+BufferFormat type_channels2buffer_format(const DataType &type,
+                                         uint32_t num_channels);
 
 class Pipeline {
  public:
@@ -254,20 +201,16 @@ class Pipeline {
   virtual ResourceBinder *resource_binder() = 0;
 };
 
-enum class TI_DLL_EXPORT ImageDimension { d1D, d2D, d3D };
+enum class TI_DLL_EXPORT ImageDimension {
+#define PER_IMAGE_DIMENSION(x) x,
+#include "taichi/inc/rhi_constants.inc.h"
+#undef PER_IMAGE_DIMENSION
+};
 
 enum class TI_DLL_EXPORT ImageLayout {
-  undefined,
-  shader_read,
-  shader_write,
-  shader_read_write,
-  color_attachment,
-  color_attachment_read,
-  depth_attachment,
-  depth_attachment_read,
-  transfer_dst,
-  transfer_src,
-  present_src
+#define PER_IMAGE_LAYOUT(x) x,
+#include "taichi/inc/rhi_constants.inc.h"
+#undef PER_IMAGE_LAYOUT
 };
 
 struct BufferImageCopyParams {
@@ -353,9 +296,6 @@ class CommandList {
                              uint32_t start_instance = 0) {
     TI_NOT_IMPLEMENTED
   }
-  virtual void clear_color(float r, float g, float b, float a) {
-    TI_NOT_IMPLEMENTED
-  }
   virtual void set_line_width(float width) {
     TI_NOT_IMPLEMENTED
   }
@@ -415,7 +355,7 @@ class CommandList {
 
 struct PipelineSourceDesc {
   PipelineSourceType type;
-  void *data{nullptr};
+  const void *data{nullptr};
   size_t size{0};
   PipelineStageType stage{PipelineStageType::compute};
 };
@@ -428,12 +368,8 @@ enum class AllocUsage : int {
   Vertex = 4,
   Index = 8,
 };
-inline AllocUsage operator|(AllocUsage a, AllocUsage b) {
-  return static_cast<AllocUsage>(static_cast<int>(a) | static_cast<int>(b));
-}
-inline bool operator&(AllocUsage a, AllocUsage b) {
-  return static_cast<int>(a) & static_cast<int>(b);
-}
+
+MAKE_ENUM_FLAGS(AllocUsage)
 
 class StreamSemaphoreObject {
  public:
@@ -475,6 +411,12 @@ class Device {
 
   void set_cap(DeviceCapability capability_id, uint32_t val) {
     caps_[capability_id] = val;
+  }
+
+  void clone_caps(Device &dest) const {
+    for (const auto &[k, v] : caps_) {
+      dest.set_cap(k, v);
+    }
   }
 
   void print_all_cap() const;
@@ -595,16 +537,33 @@ struct SurfaceConfig {
   void *window_handle{nullptr};
   uint32_t width{1};
   uint32_t height{1};
+  void *native_surface_handle{nullptr};
 };
 
-struct TI_DLL_EXPORT ImageParams {
+enum class ImageAllocUsage : int {
+  None = 0,
+  Storage = 1,
+  Sampled = 2,
+  Attachment = 4,
+};
+inline ImageAllocUsage operator|(ImageAllocUsage a, ImageAllocUsage b) {
+  return static_cast<ImageAllocUsage>(static_cast<int>(a) |
+                                      static_cast<int>(b));
+}
+inline bool operator&(ImageAllocUsage a, ImageAllocUsage b) {
+  return static_cast<int>(a) & static_cast<int>(b);
+}
+
+struct ImageParams {
   ImageDimension dimension;
   BufferFormat format;
-  ImageLayout initial_layout;
+  ImageLayout initial_layout{ImageLayout::undefined};
   uint32_t x{1};
   uint32_t y{1};
   uint32_t z{1};
   bool export_sharing{false};
+  ImageAllocUsage usage{ImageAllocUsage::Storage | ImageAllocUsage::Sampled |
+                        ImageAllocUsage::Attachment};
 };
 
 struct BlendFunc {
@@ -642,6 +601,10 @@ class TI_DLL_EXPORT GraphicsDevice : public Device {
 
   virtual std::unique_ptr<Surface> create_surface(
       const SurfaceConfig &config) = 0;
+  // You are not expected to call this directly. If you want to use this image
+  // in a taichi kernel, you usually want to create the image via
+  // `GfxRuntime::create_image`. `GfxRuntime` is available in `ProgramImpl`
+  // of GPU backends.
   virtual DeviceAllocation create_image(const ImageParams &params) = 0;
   virtual void destroy_image(DeviceAllocation handle) = 0;
 

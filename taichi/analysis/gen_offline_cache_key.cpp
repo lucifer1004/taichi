@@ -144,7 +144,6 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->dim);
     emit(expr->arg_id);
     emit(expr->element_dim);
-    emit(expr->element_shape);
   }
 
   void visit(GlobalVariableExpression *expr) override {
@@ -154,15 +153,24 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->snode);
     emit(expr->has_ambient);
     emit(expr->ambient_value);
-    emit(expr->is_primal);
+    emit(expr->snode_grad_type);
     emit(expr->adjoint);
     emit(expr->dual);
+    emit(expr->adjoint_checkbit);
   }
 
   void visit(IndexExpression *expr) override {
     emit(ExprOpCode::IndexExpression);
     emit(expr->var);
     emit(expr->indices.exprs);
+  }
+
+  void visit(MatrixExpression *expr) override {
+    emit(ExprOpCode::MatrixExpression);
+    emit(expr->dt);
+    for (auto elt : expr->elements) {
+      emit(elt);
+    }
   }
 
   void visit(StrideExpression *expr) override {
@@ -621,6 +629,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   DEFINE_EMIT_ENUM(mesh::MeshElementType);
   DEFINE_EMIT_ENUM(mesh::MeshRelationType);
   DEFINE_EMIT_ENUM(mesh::ConvType);
+  DEFINE_EMIT_ENUM(SNodeGradType);
 
 #undef DEFINE_EMIT_ENUM
 

@@ -283,6 +283,10 @@ class TI_DLL_EXPORT Program {
 
   std::unique_ptr<AotModuleBuilder> make_aot_module_builder(Arch arch);
 
+  size_t get_field_in_tree_offset(int tree_id, const SNode *child) {
+    return program_impl_->get_field_in_tree_offset(tree_id, child);
+  }
+
   DevicePtr get_snode_tree_device_ptr(int tree_id) {
     return program_impl_->get_snode_tree_device_ptr(tree_id);
   }
@@ -300,11 +304,13 @@ class TI_DLL_EXPORT Program {
                                            uint64 *result_buffer) {
     return program_impl_->allocate_memory_ndarray(alloc_size, result_buffer);
   }
+  DeviceAllocation allocate_texture(const ImageParams &params) {
+    return program_impl_->allocate_texture(params);
+  }
 
   Ndarray *create_ndarray(
       const DataType type,
       const std::vector<int> &shape,
-      const std::vector<int> &element_shape = {},
       ExternalArrayLayout layout = ExternalArrayLayout::kNull);
 
   Texture *create_texture(const DataType type,
