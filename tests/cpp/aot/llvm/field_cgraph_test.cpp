@@ -4,17 +4,21 @@
 #include "taichi/runtime/llvm/llvm_runtime_executor.h"
 #include "taichi/system/memory_pool.h"
 #include "taichi/runtime/cpu/aot_module_loader_impl.h"
-#include "taichi/runtime/cuda/aot_module_loader_impl.h"
 #include "taichi/runtime/llvm/llvm_aot_module_loader.h"
+
+#ifdef TI_WITH_CUDA
+
 #include "taichi/rhi/cuda/cuda_driver.h"
 #include "taichi/platform/cuda/detect_cuda.h"
+#include "taichi/runtime/cuda/aot_module_loader_impl.h"
+
+#endif
 
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 void run_graph_tests(aot::Module *mod,
                      LlvmRuntimeExecutor *exec,
@@ -65,6 +69,7 @@ TEST(LlvmCGraph, CpuField) {
 }
 
 TEST(LlvmCGraph, CudaField) {
+#ifdef TI_WITH_CUDA
   if (is_cuda_api_available()) {
     CompileConfig cfg;
     cfg.arch = Arch::cuda;
@@ -87,7 +92,7 @@ TEST(LlvmCGraph, CudaField) {
 
     run_graph_tests(mod.get(), &exec, result_buffer);
   }
+#endif
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -5,19 +5,19 @@
 #include "taichi/codegen/codegen.h"
 #include "taichi/codegen/llvm/codegen_llvm.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 class KernelCodeGenCUDA : public KernelCodeGen {
  public:
-  KernelCodeGenCUDA(Kernel *kernel, IRNode *ir = nullptr)
-      : KernelCodeGen(kernel, ir) {
+  explicit KernelCodeGenCUDA(const CompileConfig *compile_config,
+                             Kernel *kernel)
+      : KernelCodeGen(compile_config, kernel) {
   }
 
 // TODO: Stop defining this macro guards in the headers
 #ifdef TI_WITH_LLVM
-  static std::unique_ptr<TaskCodeGenLLVM> make_codegen_llvm(Kernel *kernel,
-                                                            IRNode *ir);
-  LLVMCompiledData compile_task(
+  LLVMCompiledTask compile_task(
+      const CompileConfig *config,
       std::unique_ptr<llvm::Module> &&module = nullptr,
       OffloadedStmt *stmt = nullptr) override;
 #endif  // TI_WITH_LLVM
@@ -39,7 +39,7 @@ class CUDAModuleToFunctionConverter : public ModuleToFunctionConverter {
 
   FunctionType convert(const std::string &kernel_name,
                        const std::vector<LlvmLaunchArgInfo> &args,
-                       LLVMCompiledData data) const override;
+                       LLVMCompiledKernel data) const override;
 };
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

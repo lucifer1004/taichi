@@ -1,3 +1,7 @@
+from taichi._lib import core as _ti_core
+from taichi.lang import impl
+from taichi.lang._texture import Texture
+
 from .staging_buffer import (copy_colors_to_vbo, copy_vertices_to_vbo,
                              get_vbo_field, to_rgba8)
 from .utils import get_field_info
@@ -28,9 +32,15 @@ class Canvas:
             img (numpy.ndarray, :class:`~taichi.MatrixField`, :class:`~taichi.Field`, :class:`~taichi.Texture`): \
                 the image to be shown.
         """
-        staging_img = to_rgba8(img)
-        info = get_field_info(staging_img)
-        self.canvas.set_image(info)
+        is_texture = isinstance(img, Texture)
+        prog_is_vk = impl.pytaichi.prog.config().arch == _ti_core.Arch.vulkan
+        # FIXME: Remove this hack. Maybe add a query function for whether the texture can be presented
+        if is_texture and prog_is_vk:
+            self.canvas.set_image_texture(img.tex)
+        else:
+            staging_img = to_rgba8(img)
+            info = get_field_info(staging_img)
+            self.canvas.set_image(info)
 
     def triangles(self,
                   vertices,
@@ -101,7 +111,7 @@ class Canvas:
         Args:
             centers: a taichi 2D Vector field, where each element indicate the \
                 3D location of a vertex.
-            radius (float): radius of the circles, relative to the height of the screen.
+            radius (Number): radius of the circles in pixels.
             color: a global color for the triangles as 3 floats representing \
                 RGB values. If `per_vertex_color` is provided, this is ignored.
             per_vertex_color (Tuple[float]): a taichi 3D vector field, where \

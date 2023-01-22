@@ -16,11 +16,11 @@
 #include <vector>
 #include <memory>
 
-TI_NAMESPACE_BEGIN
+namespace taichi {
 class DynamicLoader;
-TI_NAMESPACE_END
+}  // namespace taichi
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 using namespace taichi::lang::cccp;
 using CCFuncEntryType = void(cccp::CCContext *);
@@ -29,7 +29,8 @@ class CCProgramImpl : public ProgramImpl {
  public:
   explicit CCProgramImpl(CompileConfig &config);
 
-  FunctionType compile(Kernel *kernel, OffloadedStmt *) override;
+  FunctionType compile(const CompileConfig &compile_config,
+                       Kernel *kernel) override;
 
   std::size_t get_snode_num_dynamically_allocated(
       SNode *snode,
@@ -47,7 +48,8 @@ class CCProgramImpl : public ProgramImpl {
     // Not implemented yet.
   }
 
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder() override {
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) override {
     // Not implemented yet.
     return nullptr;
   }
@@ -88,4 +90,4 @@ class CCProgramImpl : public ProgramImpl {
   uint64 *result_buffer_{nullptr};
   bool need_relink_{true};
 };
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

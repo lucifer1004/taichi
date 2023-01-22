@@ -98,17 +98,51 @@ def test_vector_dtype():
 @test_utils.test()
 def test_vector_invalid_swizzle_patterns():
     a = ti.math.vec2(1, 2)
+
     with pytest.raises(ti.TaichiSyntaxError,
                        match=re.escape(
                            "vec2 only has attributes=('x', 'y'), got=('z',)")):
         a.z = 3
+
     with pytest.raises(
             ti.TaichiSyntaxError,
             match=re.escape(
                 "vec2 only has attributes=('x', 'y'), got=('x', 'y', 'z')")):
         a.xyz = [1, 2, 3]
 
-    with pytest.raises(ti.TaichiCompilationError,
+    with pytest.raises(ti.TaichiRuntimeError,
                        match=re.escape(
                            "value len does not match the swizzle pattern=xy")):
         a.xy = [1, 2, 3]
+
+    @ti.kernel
+    def invalid_z():
+        b = ti.math.vec2(1, 2)
+        b.z = 3
+
+    @ti.kernel
+    def invalid_xyz():
+        b = ti.math.vec2(1, 2)
+        b.xyz = [1, 2, 3]
+
+    with pytest.raises(ti.TaichiSyntaxError,
+                       match=re.escape(
+                           "vec2 only has attributes=('x', 'y'), got=('z',)")):
+        invalid_z()
+
+    with pytest.raises(
+            ti.TaichiSyntaxError,
+            match=re.escape(
+                "vec2 only has attributes=('x', 'y'), got=('x', 'y', 'z')")):
+        invalid_xyz()
+
+
+@test_utils.test()
+def test_vector_swizzle3_taichi():
+    @ti.kernel
+    def foo() -> ti.types.vector(3, ti.i32):
+        v = ti.Vector([1, 2, 3])
+        v.zxy += [v.z, v.y, v.x]
+        return v
+
+    assert (foo() == ti.Vector([3, 3, 6])).all()

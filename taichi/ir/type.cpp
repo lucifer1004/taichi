@@ -3,7 +3,7 @@
 #include "taichi/ir/type_factory.h"
 #include "taichi/ir/type_utils.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 // Note: these primitive types should never be freed. They are supposed to live
 // together with the process. This is a temporary solution. Later we should
@@ -101,6 +101,31 @@ std::string TensorType::to_string() const {
   }
   s += fmt::format(") {}]", element_->to_string());
   return s;
+}
+
+std::string StructType::to_string() const {
+  std::string s = "struct(";
+  for (int i = 0; i < elements_.size(); i++) {
+    if (i) {
+      s += ", ";
+    }
+    s += std::to_string(i) + ": " + elements_[i]->to_string();
+  }
+  s += ")";
+  return s;
+}
+
+Type *StructType::get_element_type(const std::vector<int> &indices) const {
+  const Type *type_now = this;
+  for (auto ind : indices) {
+    if (auto tensor_type = type_now->cast<TensorType>()) {
+      TI_ASSERT(ind < tensor_type->get_num_elements())
+      type_now = tensor_type->get_element_type();
+    } else {
+      type_now = type_now->as<StructType>()->elements_[ind];
+    }
+  }
+  return (Type *)type_now;
 }
 
 bool Type::is_primitive(PrimitiveTypeID type) const {
@@ -418,4 +443,4 @@ float64 TypedConstant::val_cast_to_float64() const {
   }
 }
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

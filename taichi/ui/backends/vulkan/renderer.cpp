@@ -4,7 +4,7 @@
 
 using taichi::lang::Program;
 
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 namespace vulkan {
 
@@ -47,6 +47,12 @@ void Renderer::set_background_color(const glm::vec3 &color) {
 void Renderer::set_image(const SetImageInfo &info) {
   SetImage *s = get_renderable_of_type<SetImage>(VboHelpers::all());
   s->update_data(info);
+  next_renderable_ += 1;
+}
+
+void Renderer::set_image(Texture *tex) {
+  SetImage *s = get_renderable_of_type<SetImage>(VboHelpers::all());
+  s->update_data(tex);
   next_renderable_ += 1;
 }
 
@@ -148,7 +154,9 @@ void Renderer::prepare_for_next_frame() {
 
 void Renderer::draw_frame(Gui *gui) {
   auto stream = app_context_.device().get_graphics_stream();
-  auto cmd_list = stream->new_command_list();
+  auto [cmd_list, res] = stream->new_command_list_unique();
+  assert(res == RhiResult::success && "Failed to allocate command list");
+
   bool color_clear = true;
   std::vector<float> clear_colors = {background_color_[0], background_color_[1],
                                      background_color_[2], 1};
@@ -157,9 +165,14 @@ void Renderer::draw_frame(Gui *gui) {
   cmd_list->image_transition(image, ImageLayout::undefined,
                              ImageLayout::color_attachment);
   auto depth_image = swap_chain_.depth_allocation();
+
+  for (int i = 0; i < next_renderable_; ++i) {
+    renderables_[i]->record_prepass_this_frame_commands(cmd_list.get());
+  }
+
   cmd_list->begin_renderpass(
-      /*xmin=*/0, /*ymin=*/0, /*xmax=*/swap_chain_.width(),
-      /*ymax=*/swap_chain_.height(), /*num_color_attachments=*/1, &image,
+      /*x0=*/0, /*y0=*/0, /*x1=*/swap_chain_.width(),
+      /*y1=*/swap_chain_.height(), /*num_color_attachments=*/1, &image,
       &color_clear, &clear_colors, &depth_image,
       /*depth_clear=*/true);
 
@@ -219,4 +232,4 @@ taichi::lang::StreamSemaphore Renderer::get_render_complete_semaphore() {
 
 }  // namespace vulkan
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui

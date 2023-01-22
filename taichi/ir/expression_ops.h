@@ -12,25 +12,19 @@
   Expr expr_##opname(const Expr &expr) {                             \
     return Expr::make<UnaryOpExpression>(UnaryOpType::opname, expr); \
   }                                                                  \
-  Expr operator op(const Expr &expr) {                               \
-    return expr_##opname(expr);                                      \
-  }
+  Expr operator op(const Expr &expr) { return expr_##opname(expr); }
 
 #define DEFINE_EXPRESSION_FUNC_UNARY(opname)                         \
   Expr opname(const Expr &expr) {                                    \
     return Expr::make<UnaryOpExpression>(UnaryOpType::opname, expr); \
   }                                                                  \
-  Expr expr_##opname(const Expr &expr) {                             \
-    return opname(expr);                                             \
-  }
+  Expr expr_##opname(const Expr &expr) { return opname(expr); }
 
 #define DEFINE_EXPRESSION_OP_BINARY(op, opname)                            \
   Expr operator op(const Expr &lhs, const Expr &rhs) {                     \
     return Expr::make<BinaryOpExpression>(BinaryOpType::opname, lhs, rhs); \
   }                                                                        \
-  Expr expr_##opname(const Expr &lhs, const Expr &rhs) {                   \
-    return lhs op rhs;                                                     \
-  }
+  Expr expr_##opname(const Expr &lhs, const Expr &rhs) { return lhs op rhs; }
 
 #define DEFINE_EXPRESSION_FUNC_BINARY(opname)                              \
   Expr opname(const Expr &lhs, const Expr &rhs) {                          \
@@ -73,8 +67,7 @@
 
 #endif
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 DEFINE_EXPRESSION_FUNC_UNARY(sqrt)
 DEFINE_EXPRESSION_FUNC_UNARY(round)
@@ -126,8 +119,7 @@ DEFINE_EXPRESSION_FUNC_BINARY(bit_shr)
 DEFINE_EXPRESSION_FUNC_TERNARY(select)
 DEFINE_EXPRESSION_FUNC_TERNARY(ifte)
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang
 
 #undef DEFINE_EXPRESSION_OP_UNARY
 #undef DEFINE_EXPRESSION_OP_BINARY

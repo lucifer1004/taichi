@@ -7,8 +7,7 @@
 #include "taichi/ir/statements.h"
 #include "taichi/system/profiler.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 CFGNode::CFGNode(Block *block,
                  int begin_location,
@@ -410,7 +409,7 @@ bool CFGNode::dead_store_elimination(bool after_lower_access) {
     }
     if (store_ptrs.size() == 1) {
       // Dead store elimination
-      auto store_ptr = store_ptrs.front();
+      auto store_ptr = *store_ptrs.begin();
       if (!after_lower_access ||
           (store_ptr->is<AllocaStmt>() || store_ptr->is<AdStackAllocaStmt>())) {
         // After lower_access, we only analyze local variables and stacks.
@@ -473,7 +472,7 @@ bool CFGNode::dead_store_elimination(bool after_lower_access) {
     auto load_ptrs = irpass::analysis::get_load_pointers(stmt);
     if (load_ptrs.size() == 1 && store_ptrs.empty()) {
       // Identical load elimination
-      auto load_ptr = load_ptrs.front();
+      auto load_ptr = load_ptrs.begin()[0];
       if (!after_lower_access ||
           (load_ptr->is<AllocaStmt>() || load_ptr->is<AdStackAllocaStmt>())) {
         // After lower_access, we only analyze local variables and stacks.
@@ -600,12 +599,13 @@ void ControlFlowGraph::reaching_definition_analysis(bool after_lower_access) {
   for (int i = 0; i < num_nodes; i++) {
     for (int j = nodes[i]->begin_location; j < nodes[i]->end_location; j++) {
       auto stmt = nodes[i]->block->statements[j].get();
-      if ((stmt->is<PtrOffsetStmt>() &&
-           stmt->as<PtrOffsetStmt>()->origin->is<AllocaStmt>()) ||
+      if ((stmt->is<MatrixPtrStmt>() &&
+           stmt->as<MatrixPtrStmt>()->origin->is<AllocaStmt>()) ||
           (!after_lower_access &&
            (stmt->is<GlobalPtrStmt>() || stmt->is<ExternalPtrStmt>() ||
             stmt->is<BlockLocalPtrStmt>() || stmt->is<ThreadLocalPtrStmt>() ||
-            stmt->is<GlobalTemporaryStmt>() || stmt->is<PtrOffsetStmt>()))) {
+            stmt->is<GlobalTemporaryStmt>() || stmt->is<MatrixPtrStmt>() ||
+            stmt->is<GetChStmt>()))) {
         // TODO: unify them
         // A global pointer that may contain some data before this kernel.
         nodes[start_node]->reach_gen.insert(stmt);
@@ -680,8 +680,8 @@ void ControlFlowGraph::live_variable_analysis(
     if (stmt->is<AllocaStmt>() || stmt->is<AdStackAllocaStmt>()) {
       return false;
     }
-    if (stmt->is<PtrOffsetStmt>() &&
-        stmt->cast<PtrOffsetStmt>()->origin->is<AllocaStmt>()) {
+    if (stmt->is<MatrixPtrStmt>() &&
+        stmt->cast<MatrixPtrStmt>()->origin->is<AllocaStmt>()) {
       return false;
     }
     if (auto *gptr = stmt->cast<GlobalPtrStmt>();
@@ -1026,5 +1026,4 @@ void ControlFlowGraph::determine_ad_stack_size(int default_ad_stack_size) {
   }
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -13,8 +13,7 @@
 
 using namespace taichi::lang::vulkan;
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace {
 std::vector<std::string> get_required_instance_extensions() {
@@ -79,10 +78,10 @@ VulkanProgramImpl::VulkanProgramImpl(CompileConfig &config)
     : ProgramImpl(config) {
 }
 
-FunctionType VulkanProgramImpl::compile(Kernel *kernel,
-                                        OffloadedStmt *offloaded) {
+FunctionType VulkanProgramImpl::compile(const CompileConfig &compile_config,
+                                        Kernel *kernel) {
   return register_params_to_executable(
-      get_cache_manager()->load_or_compile(config, kernel),
+      get_cache_manager()->load_or_compile(&compile_config, kernel),
       vulkan_runtime_.get());
 }
 
@@ -129,6 +128,11 @@ void VulkanProgramImpl::materialize_runtime(MemoryPool *memory_pool,
     int32_t minor = std::atoll(config->vk_api_version.c_str() + idot1 + 1);
     int32_t patch = std::atoll(config->vk_api_version.c_str() + idot2 + 1);
     evd_params.api_version = VK_MAKE_API_VERSION(0, major, minor, patch);
+  }
+
+  if (config->debug) {
+    TI_WARN("Enabling vulkan validation layer in debug mode");
+    evd_params.enable_validation_layer = true;
   }
 #if !defined(ANDROID)
   if (glfw_window) {
@@ -177,13 +181,14 @@ void VulkanProgramImpl::materialize_snode_tree(SNodeTree *tree,
   snode_tree_mgr_->materialize_snode_tree(tree);
 }
 
-std::unique_ptr<AotModuleBuilder> VulkanProgramImpl::make_aot_module_builder() {
+std::unique_ptr<AotModuleBuilder> VulkanProgramImpl::make_aot_module_builder(
+    const DeviceCapabilityConfig &caps) {
   if (vulkan_runtime_) {
     return std::make_unique<gfx::AotModuleBuilderImpl>(
-        snode_tree_mgr_->get_compiled_structs(), Arch::vulkan);
+        snode_tree_mgr_->get_compiled_structs(), Arch::vulkan, *config, caps);
   } else {
     return std::make_unique<gfx::AotModuleBuilderImpl>(
-        aot_compiled_snode_structs_, Arch::vulkan);
+        aot_compiled_snode_structs_, Arch::vulkan, *config, caps);
   }
 }
 
@@ -200,11 +205,10 @@ DeviceAllocation VulkanProgramImpl::allocate_texture(
   return vulkan_runtime_->create_image(params);
 }
 
-std::unique_ptr<aot::Kernel> VulkanProgramImpl::make_aot_kernel(
-    Kernel &kernel) {
-  auto params = get_cache_manager()->load_or_compile(config, &kernel);
-  return std::make_unique<gfx::KernelImpl>(vulkan_runtime_.get(),
-                                           std::move(params));
+void VulkanProgramImpl::enqueue_compute_op_lambda(
+    std::function<void(Device *device, CommandList *cmdlist)> op,
+    const std::vector<ComputeOpImageRef> &image_refs) {
+  vulkan_runtime_->enqueue_compute_op_lambda(op, image_refs);
 }
 
 void VulkanProgramImpl::dump_cache_data_to_disk() {
@@ -220,18 +224,14 @@ const std::unique_ptr<gfx::CacheManager>
     &VulkanProgramImpl::get_cache_manager() {
   if (!cache_manager_) {
     TI_ASSERT(vulkan_runtime_ && snode_tree_mgr_ && embedded_device_);
-    auto target_device = std::make_unique<aot::TargetDevice>(config->arch);
-    embedded_device_->device()->clone_caps(*target_device);
     using Mgr = gfx::CacheManager;
     Mgr::Params params;
     params.arch = config->arch;
-    params.mode =
-        offline_cache::enabled_wip_offline_cache(config->offline_cache)
-            ? Mgr::MemAndDiskCache
-            : Mgr::MemCache;
+    params.mode = config->offline_cache ? Mgr::MemAndDiskCache : Mgr::MemCache;
     params.cache_path = config->offline_cache_file_path;
     params.runtime = vulkan_runtime_.get();
-    params.target_device = std::move(target_device);
+    params.compile_config = config;
+    params.caps = embedded_device_->device()->get_caps();
     params.compiled_structs = &snode_tree_mgr_->get_compiled_structs();
     cache_manager_ = std::make_unique<gfx::CacheManager>(std::move(params));
   }
@@ -244,5 +244,4 @@ VulkanProgramImpl::~VulkanProgramImpl() {
   embedded_device_.reset();
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

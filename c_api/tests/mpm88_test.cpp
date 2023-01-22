@@ -5,6 +5,7 @@
 
 #include "c_api_test_utils.h"
 #include "taichi/cpp/taichi.hpp"
+#include "c_api/tests/gtest_fixture.h"
 
 namespace demo {
 
@@ -99,8 +100,8 @@ class MPM88DemoImpl {
 
 }  // namespace demo
 
-TEST(CapiMpm88Test, Cuda) {
-  if (capi::utils::is_cuda_available()) {
+TEST_F(CapiTest, Mpm88TestCuda) {
+  if (ti::is_arch_available(TI_ARCH_CUDA)) {
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;
@@ -112,8 +113,8 @@ TEST(CapiMpm88Test, Cuda) {
   }
 }
 
-TEST(CapiMpm88Test, Vulkan) {
-  if (capi::utils::is_vulkan_available()) {
+TEST_F(CapiTest, Mpm88TestVulkan) {
+  if (ti::is_arch_available(TI_ARCH_VULKAN)) {
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;
@@ -125,8 +126,8 @@ TEST(CapiMpm88Test, Vulkan) {
   }
 }
 
-TEST(CapiMpm88Test, Opengl) {
-  if (capi::utils::is_opengl_available()) {
+TEST_F(CapiTest, Mpm88TestOpengl) {
+  if (ti::is_arch_available(TI_ARCH_OPENGL)) {
     const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
 
     std::stringstream aot_mod_ss;

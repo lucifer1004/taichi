@@ -44,15 +44,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#define TI_UI_NAMESPACE_BEGIN \
-  namespace taichi {          \
-  namespace ui {
-
-#define TI_UI_NAMESPACE_END \
-  }                         \
-  }
-
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 #if !defined(ANDROID)
 inline void initGLFW() {
@@ -69,13 +61,15 @@ static void glfw_error_callback(int code, const char *description) {
 inline GLFWwindow *create_glfw_window_(const std::string &name,
                                        int screenWidth,
                                        int screenHeight,
+                                       int window_pos_x,
+                                       int window_pos_y,
                                        bool vsync) {
   initGLFW();
   GLFWwindow *window;
 
   glfwSetErrorCallback(glfw_error_callback);
 
-  glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
   window = glfwCreateWindow(screenWidth, screenHeight, name.c_str(), nullptr,
@@ -90,6 +84,12 @@ inline GLFWwindow *create_glfw_window_(const std::string &name,
     printf("GLFW reports no Vulkan support\n");
   }
 
+  // Reset the window hints to default
+  glfwDefaultWindowHints();
+
+  glfwSetWindowPos(window, window_pos_x, window_pos_y);
+
+  glfwShowWindow(window);
   // Invalid for Vulkan
   /*
   if (vsync) {
@@ -192,28 +192,10 @@ inline std::string button_id_to_name(int id) {
 }
 #endif
 
-inline int next_power_of_2(int n) {
-  int count = 0;
-
-  if (n && !(n & (n - 1)))
-    return n;
-
-  while (n != 0) {
-    n >>= 1;
-    count += 1;
-  }
-
-  return 1 << count;
-}
-
-#define DEFINE_PROPERTY(Type, name)       \
-  Type name;                              \
-  void set_##name(const Type &new_name) { \
-    name = new_name;                      \
-  }                                       \
-  Type get_##name() {                     \
-    return name;                          \
-  }
+#define DEFINE_PROPERTY(Type, name)                          \
+  Type name;                                                 \
+  void set_##name(const Type &new_name) { name = new_name; } \
+  Type get_##name() { return name; }
 
 inline std::vector<char> read_file(const std::string &filename) {
   std::ifstream file(filename, std::ios::ate | std::ios::binary);
@@ -233,4 +215,4 @@ inline std::vector<char> read_file(const std::string &filename) {
   return buffer;
 }
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui

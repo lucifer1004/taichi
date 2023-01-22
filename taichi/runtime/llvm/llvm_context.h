@@ -15,8 +15,7 @@
 #include "taichi/jit/jit_session.h"
 #include "taichi/codegen/llvm/llvm_compiled_data.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class JITSessionCPU;
 class LlvmProgramImpl;
@@ -32,7 +31,7 @@ class TaichiLLVMContext {
     llvm::LLVMContext *llvm_context{nullptr};
     std::unique_ptr<llvm::Module> runtime_module{nullptr};
     std::unordered_map<int, std::unique_ptr<llvm::Module>> struct_modules;
-    ThreadLocalData(std::unique_ptr<llvm::orc::ThreadSafeContext> ctx);
+    explicit ThreadLocalData(std::unique_ptr<llvm::orc::ThreadSafeContext> ctx);
     ~ThreadLocalData();
   };
   CompileConfig *config_;
@@ -142,8 +141,8 @@ class TaichiLLVMContext {
 
   static std::string get_struct_for_func_name(int tls_size);
 
-  LLVMCompiledData link_compiled_tasks(
-      std::vector<std::unique_ptr<LLVMCompiledData>> data_list);
+  LLVMCompiledKernel link_compiled_tasks(
+      std::vector<std::unique_ptr<LLVMCompiledTask>> data_list);
 
  private:
   std::unique_ptr<llvm::Module> clone_module_to_context(
@@ -151,6 +150,8 @@ class TaichiLLVMContext {
       llvm::LLVMContext *target_context);
 
   void link_module_with_cuda_libdevice(std::unique_ptr<llvm::Module> &module);
+
+  void link_module_with_amdgpu_libdevice(std::unique_ptr<llvm::Module> &module);
 
   static int num_instructions(llvm::Function *func);
 
@@ -205,5 +206,4 @@ std::unique_ptr<llvm::Module> module_from_bitcode_file(
     const std::string &bitcode_path,
     llvm::LLVMContext *ctx);
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -2,7 +2,7 @@
 #include "taichi/ir/statements.h"
 #include "taichi/common/logging.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 namespace {
 
@@ -447,6 +447,10 @@ AdStackLoadTopAdjStmt *IRBuilder::ad_stack_load_top_adjoint(
   return insert(Stmt::make_typed<AdStackLoadTopAdjStmt>(stack));
 }
 
+MatrixInitStmt *IRBuilder::create_matrix_init(std::vector<Stmt *> elements) {
+  return insert(Stmt::make_typed<MatrixInitStmt>(elements));
+}
+
 void IRBuilder::ad_stack_accumulate_adjoint(AdStackAllocaStmt *stack,
                                             Stmt *val) {
   insert(Stmt::make_typed<AdStackAccAdjointStmt>(stack, val));
@@ -471,17 +475,8 @@ MeshRelationAccessStmt *IRBuilder::get_relation_access(
       mesh, mesh_idx, to_type, neighbor_idx));
 }
 
-MeshIndexConversionStmt *IRBuilder::get_index_conversion(
-    mesh::Mesh *mesh,
-    mesh::MeshElementType idx_type,
-    Stmt *idx,
-    mesh::ConvType conv_type) {
-  return insert(Stmt::make_typed<MeshIndexConversionStmt>(mesh, idx_type, idx,
-                                                          conv_type));
-}
-
 MeshPatchIndexStmt *IRBuilder::get_patch_index() {
   return insert(Stmt::make_typed<MeshPatchIndexStmt>());
 }
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

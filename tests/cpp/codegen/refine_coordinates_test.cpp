@@ -16,9 +16,7 @@
 #include "taichi/runtime/program_impls/llvm/llvm_program.h"
 #include "taichi/codegen/llvm/struct_llvm.h"
 
-namespace taichi {
-
-namespace lang {
+namespace taichi::lang {
 namespace {
 
 constexpr char kFuncName[] = "run_refine_coords";
@@ -33,12 +31,12 @@ class InvokeRefineCoordinatesBuilder : public LLVMModuleBuilder {
   static FuncType build(const SNode *snode, TaichiLLVMContext *tlctx) {
     InvokeRefineCoordinatesBuilder mb{tlctx};
     mb.run_jit(snode);
-    LLVMCompiledData data;
+    LLVMCompiledTask data;
     data.module = std::move(mb.module);
     data.used_tree_ids = std::move(mb.used_snode_tree_ids);
     data.tasks.emplace_back(kFuncName);
-    std::vector<std::unique_ptr<LLVMCompiledData>> data_list;
-    data_list.push_back(std::make_unique<LLVMCompiledData>(std::move(data)));
+    std::vector<std::unique_ptr<LLVMCompiledTask>> data_list;
+    data_list.push_back(std::make_unique<LLVMCompiledTask>(std::move(data)));
     auto linked_data = tlctx->link_compiled_tasks(std::move(data_list));
     auto *jit = tlctx->create_jit_module(std::move(linked_data.module));
     auto *fn = jit->lookup_function(kFuncName);
@@ -116,13 +114,12 @@ struct BitsRange {
 };
 
 constexpr int kPointerSize = 5;
-constexpr int kDenseSize = 7;
+constexpr int kDenseSize = 8;
 
 class RefineCoordinatesTest : public ::testing::Test {
  protected:
   void SetUp() override {
     arch_ = host_arch();
-    config_.packed = false;
     config_.print_kernel_llvm_ir = false;
     prog_ = std::make_unique<Program>(arch_);
     auto *llvm_prog_ = get_llvm_program(prog_.get());
@@ -130,8 +127,8 @@ class RefineCoordinatesTest : public ::testing::Test {
 
     root_snode_ = std::make_unique<SNode>(/*depth=*/0, /*t=*/SNodeType::root);
     const std::vector<Axis> axes = {Axis{0}};
-    ptr_snode_ = &(root_snode_->pointer(axes, kPointerSize, false));
-    dense_snode_ = &(ptr_snode_->dense(axes, kDenseSize, false));
+    ptr_snode_ = &(root_snode_->pointer(axes, kPointerSize, ""));
+    dense_snode_ = &(ptr_snode_->dense(axes, kDenseSize, ""));
     // Must end with a `place` SNode.
     auto &leaf_snode = dense_snode_->insert_children(SNodeType::place);
     leaf_snode.dt = PrimitiveType::f32;
@@ -183,6 +180,5 @@ TEST_F(RefineCoordinatesTest, Basic) {
 }
 
 }  // namespace
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang
 #endif  // #ifdef TI_WITH_LLVM

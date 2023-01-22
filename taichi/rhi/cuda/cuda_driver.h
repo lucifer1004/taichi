@@ -20,7 +20,7 @@ static_assert(sizeof(CUjit_option) == sizeof(uint32));
 }  // namespace taichi
 #endif
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 // Driver constants from cuda.h
 
@@ -40,6 +40,7 @@ constexpr uint32 CU_POINTER_ATTRIBUTE_MEMORY_TYPE = 2;
 constexpr uint32 CU_DEVICE_ATTRIBUTE_UNIFIED_ADDRESSING = 41;
 constexpr uint32 CUDA_SUCCESS = 0;
 constexpr uint32 CU_MEMORYTYPE_DEVICE = 2;
+constexpr uint32 CU_LIMIT_STACK_SIZE = 0;
 
 std::string get_cuda_error_message(uint32 err);
 
@@ -178,4 +179,4 @@ class CUSOLVERDriver : protected CUDADriverBase {
   bool cusolver_loaded_{false};
 };
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

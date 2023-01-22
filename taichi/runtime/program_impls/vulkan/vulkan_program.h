@@ -22,8 +22,7 @@
 
 #include <optional>
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace vulkan {
 class VulkanDeviceCreator;
@@ -31,8 +30,9 @@ class VulkanDeviceCreator;
 
 class VulkanProgramImpl : public ProgramImpl {
  public:
-  VulkanProgramImpl(CompileConfig &config);
-  FunctionType compile(Kernel *kernel, OffloadedStmt *offloaded) override;
+  explicit VulkanProgramImpl(CompileConfig &config);
+  FunctionType compile(const CompileConfig &compile_config,
+                       Kernel *kernel) override;
 
   std::size_t get_snode_num_dynamically_allocated(
       SNode *snode,
@@ -58,7 +58,8 @@ class VulkanProgramImpl : public ProgramImpl {
     return vulkan_runtime_->flush();
   }
 
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder() override;
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) override;
 
   void destroy_snode_tree(SNodeTree *snode_tree) override {
     TI_ASSERT(snode_tree_mgr_ != nullptr);
@@ -67,6 +68,9 @@ class VulkanProgramImpl : public ProgramImpl {
 
   DeviceAllocation allocate_memory_ndarray(std::size_t alloc_size,
                                            uint64 *result_buffer) override;
+  bool used_in_kernel(DeviceAllocationId id) override {
+    return vulkan_runtime_->used_in_kernel(id);
+  }
   DeviceAllocation allocate_texture(const ImageParams &params) override;
 
   Device *get_compute_device() override {
@@ -91,13 +95,15 @@ class VulkanProgramImpl : public ProgramImpl {
     return snode_tree_mgr_->get_snode_tree_device_ptr(tree_id);
   }
 
-  std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) override;
+  void enqueue_compute_op_lambda(
+      std::function<void(Device *device, CommandList *cmdlist)> op,
+      const std::vector<ComputeOpImageRef> &image_refs) override;
 
   void dump_cache_data_to_disk() override;
 
   const std::unique_ptr<gfx::CacheManager> &get_cache_manager();
 
-  ~VulkanProgramImpl();
+  ~VulkanProgramImpl() override;
 
  private:
   std::unique_ptr<vulkan::VulkanDeviceCreator> embedded_device_{nullptr};
@@ -106,5 +112,4 @@ class VulkanProgramImpl : public ProgramImpl {
   std::vector<spirv::CompiledSNodeStructs> aot_compiled_snode_structs_;
   std::unique_ptr<gfx::CacheManager> cache_manager_{nullptr};
 };
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

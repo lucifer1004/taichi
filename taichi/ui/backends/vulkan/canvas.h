@@ -31,25 +31,27 @@
 #include "taichi/ui/backends/vulkan/renderables/circles.h"
 #include "taichi/ui/backends/vulkan/renderables/lines.h"
 
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 namespace vulkan {
 
 class TI_DLL_EXPORT Canvas final : public CanvasBase {
  public:
-  Canvas(Renderer *renderer);
+  explicit Canvas(Renderer *renderer);
 
-  virtual void set_background_color(const glm::vec3 &color) override;
+  void set_background_color(const glm::vec3 &color) override;
 
-  virtual void set_image(const SetImageInfo &info) override;
+  void set_image(const SetImageInfo &info) override;
 
-  virtual void triangles(const TrianglesInfo &info) override;
+  void set_image(taichi::lang::Texture *tex) override;
 
-  virtual void circles(const CirclesInfo &info) override;
+  void triangles(const TrianglesInfo &info) override;
 
-  virtual void lines(const LinesInfo &info) override;
+  void circles(const CirclesInfo &info) override;
 
-  virtual void scene(SceneBase *scene_base) override;
+  void lines(const LinesInfo &info) override;
+
+  void scene(SceneBase *scene_base) override;
 
  private:
   Renderer *renderer_;
@@ -57,4 +59,4 @@ class TI_DLL_EXPORT Canvas final : public CanvasBase {
 
 }  // namespace vulkan
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui

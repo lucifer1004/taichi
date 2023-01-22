@@ -1,20 +1,20 @@
 #include "compile_config.h"
 
 #include <thread>
+#include "taichi/rhi/arch.h"
+#include "taichi/util/offline_cache.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 CompileConfig::CompileConfig() {
   arch = host_arch();
   simd_width = default_simd_width(arch);
   opt_level = 1;
   external_optimization_level = 3;
-  packed = false;
   print_ir = false;
   print_preprocessed_ir = false;
   print_accessor_ir = false;
   print_evaluator_ir = false;
-  print_benchmark_stat = false;
   use_llvm = true;
   demote_dense_struct_fors = true;
   advanced_optimization = true;
@@ -23,8 +23,6 @@ CompileConfig::CompileConfig() {
   debug = false;
   cfg_optimization = true;
   check_out_of_bound = false;
-  validate_autodiff = false;
-  lazy_compilation = true;
   serial_schedule = false;
   simplify_before_lower_access = true;
   lower_access = true;
@@ -41,14 +39,12 @@ CompileConfig::CompileConfig() {
   gpu_max_reg = 0;  // 0 means using the default value from the CUDA driver.
   verbose = true;
   fast_math = true;
-  dynamic_index = false;
   flatten_if = false;
   make_thread_local = true;
   make_block_local = true;
   detect_read_only = true;
   ndarray_use_cached_allocator = true;
-  use_mesh = false;
-  real_matrix = false;
+  real_matrix_scalarize = true;
 
   saturating_grid_dim = 0;
   max_block_dim = 0;
@@ -70,4 +66,15 @@ CompileConfig::CompileConfig() {
   cc_link_cmd = "gcc -shared -fPIC -o '{}' '{}'";
 }
 
-TLANG_NAMESPACE_END
+void CompileConfig::fit() {
+  if (debug) {
+    // TODO: allow users to run in debug mode without out-of-bound checks
+    check_out_of_bound = true;
+  }
+  if (arch == Arch::cc || arch_uses_spirv(arch)) {
+    demote_dense_struct_fors = true;
+  }
+  offline_cache::disable_offline_cache_if_needed(this);
+}
+
+}  // namespace taichi::lang

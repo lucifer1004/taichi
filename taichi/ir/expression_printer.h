@@ -6,12 +6,11 @@
 #include "taichi/program/program.h"
 #include "taichi/analysis/offline_cache_util.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class ExpressionPrinter : public ExpressionVisitor {
  public:
-  ExpressionPrinter(std::ostream *os = nullptr) : os_(os) {
+  explicit ExpressionPrinter(std::ostream *os = nullptr) : os_(os) {
   }
 
   void set_ostream(std::ostream *os) {
@@ -96,8 +95,8 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   }
 
   void visit(ExternalTensorExpression *expr) override {
-    emit(fmt::format("{}d_ext_arr (element_dim={}, dt={})", expr->dim,
-                     expr->element_dim, expr->dt->to_string()));
+    emit(fmt::format("{}d_ext_arr (element_dim={}, dt={}, grad={})", expr->dim,
+                     expr->element_dim, expr->dt->to_string(), expr->is_grad));
   }
 
   void visit(FieldExpression *expr) override {
@@ -110,6 +109,17 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     }
   }
 
+  void visit(MatrixFieldExpression *expr) override {
+    emit('[');
+    emit_vector(expr->fields);
+    emit("] (");
+    emit_vector(expr->element_shape);
+    if (expr->dynamic_index_stride) {
+      emit(", dynamic_index_stride = ", expr->dynamic_index_stride);
+    }
+    emit(')');
+  }
+
   void visit(MatrixExpression *expr) override {
     emit('[');
     emit_vector(expr->elements);
@@ -120,18 +130,19 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   void visit(IndexExpression *expr) override {
     expr->var->accept(this);
     emit('[');
-    emit_vector(expr->indices.exprs);
+    if (expr->ret_shape.empty()) {
+      emit_vector(expr->indices_group[0].exprs);
+    } else {
+      for (auto &indices : expr->indices_group) {
+        emit('(');
+        emit_vector(indices.exprs);
+        emit("), ");
+      }
+      emit("shape=(");
+      emit_vector(expr->ret_shape);
+      emit(')');
+    }
     emit(']');
-  }
-
-  void visit(StrideExpression *expr) override {
-    expr->var->accept(this);
-    emit('[');
-    emit_vector(expr->indices.exprs);
-    emit("] (");
-    emit_vector(expr->shape);
-    emit(", stride = ", expr->stride);
-    emit(')');
   }
 
   void visit(RangeAssumptionExpression *expr) override {
@@ -181,9 +192,9 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     emit('(', expr->snode->get_node_type_name_hinted(), ", [");
     emit_vector(expr->indices.exprs);
     emit("]");
-    if (expr->value.expr) {
+    if (!expr->values.empty()) {
       emit(' ');
-      expr->value->accept(this);
+      emit_vector(expr->values);
     }
     emit(')');
   }
@@ -196,12 +207,6 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
     emit("external_tensor_shape_along_axis(");
     expr->ptr->accept(this);
     emit(", ", expr->axis, ')');
-  }
-
-  void visit(FuncCallExpression *expr) override {
-    emit("func_call(\"", expr->func->func_key.get_full_name(), "\", ");
-    emit_vector(expr->args.exprs);
-    emit(')');
   }
 
   void visit(MeshPatchIndexExpression *expr) override {
@@ -232,6 +237,14 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   void visit(ReferenceExpression *expr) override {
     emit("ref(");
     expr->var->accept(this);
+    emit(")");
+  }
+
+  void visit(GetElementExpression *expr) override {
+    emit("get_element(");
+    expr->src->accept(this);
+    emit(", ");
+    emit_vector(expr->index);
     emit(")");
   }
 
@@ -275,5 +288,4 @@ class ExpressionHumanFriendlyPrinter : public ExpressionPrinter {
   }
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -10,7 +10,7 @@
 #include "taichi/ir/visitors.h"
 #include "taichi/system/profiler.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 namespace {
 
@@ -76,6 +76,8 @@ std::vector<std::pair<T *, AtomicOpType>> find_global_reduction_destinations(
             }
           }
           for (auto &op : stmt->get_operands()) {
+            if (op == nullptr)
+              continue;
             // Make sure the values of related atomic operations are not used.
             if (auto atomic = op->cast<AtomicOpStmt>()) {
               if (irpass::analysis::maybe_same_address(atomic->dest,
@@ -207,4 +209,4 @@ void make_thread_local(IRNode *root, const CompileConfig &config) {
 
 }  // namespace irpass
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

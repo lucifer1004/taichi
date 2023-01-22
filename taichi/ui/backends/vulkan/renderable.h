@@ -42,6 +42,7 @@ struct RenderableConfig {
       taichi::lang::TopologyType::Triangles};
   taichi::lang::PolygonMode polygon_mode{taichi::lang::PolygonMode::Fill};
   VertexAttributes vbo_attrs{VboHelpers::all()};
+  bool vertex_input_rate_instance{false};
 
   size_t vbo_size() const {
     return VboHelpers::size(vbo_attrs);
@@ -55,6 +56,10 @@ class Renderable {
   virtual void record_this_frame_commands(
       taichi::lang::CommandList *command_list);
 
+  virtual void record_prepass_this_frame_commands(
+      taichi::lang::CommandList *command_list) {
+  }
+
   virtual ~Renderable() = default;
 
   taichi::lang::Pipeline &pipeline();
@@ -67,6 +72,8 @@ class Renderable {
   AppContext *app_context_;
 
   std::unique_ptr<taichi::lang::Pipeline> pipeline_{nullptr};
+  std::unique_ptr<taichi::lang::ShaderResourceSet> resource_set_{nullptr};
+  std::unique_ptr<taichi::lang::RasterResources> raster_state_{nullptr};
 
   taichi::lang::DeviceAllocation vertex_buffer_;
   taichi::lang::DeviceAllocation index_buffer_;
@@ -89,7 +96,7 @@ class Renderable {
 
   virtual void create_bindings();
 
-  void create_graphics_pipeline();
+  virtual void create_graphics_pipeline();
 
   void create_vertex_buffer();
 

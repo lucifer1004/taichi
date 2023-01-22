@@ -7,8 +7,7 @@
 #include "taichi/ir/type_utils.h"
 #include "taichi/rhi/device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class Program;
 class NdarrayRwAccessorsBank;
@@ -58,8 +57,7 @@ class TI_DLL_EXPORT Ndarray {
   intptr_t get_device_allocation_ptr_as_int() const;
   std::size_t get_element_size() const;
   std::size_t get_nelement() const;
-  template <typename T>
-  T read(const std::vector<int> &I) const;
+  TypedConstant read(const std::vector<int> &I) const;
   template <typename T>
   void write(const std::vector<int> &I, T val) const;
   int64 read_int(const std::vector<int> &i);
@@ -81,5 +79,4 @@ class TI_DLL_EXPORT Ndarray {
   Program *prog_{nullptr};
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -4,16 +4,21 @@
 #include "taichi/runtime/llvm/llvm_runtime_executor.h"
 #include "taichi/system/memory_pool.h"
 #include "taichi/runtime/cpu/aot_module_loader_impl.h"
-#include "taichi/runtime/cuda/aot_module_loader_impl.h"
+#include "taichi/runtime/dx12/aot_module_loader_impl.h"
+
+#ifdef TI_WITH_CUDA
+
 #include "taichi/rhi/cuda/cuda_driver.h"
 #include "taichi/platform/cuda/detect_cuda.h"
+#include "taichi/runtime/cuda/aot_module_loader_impl.h"
+
+#endif
 
 #define TI_RUNTIME_HOST
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 TEST(LlvmAotTest, CpuKernel) {
   CompileConfig cfg;
@@ -47,16 +52,21 @@ TEST(LlvmAotTest, CpuKernel) {
   ctx.set_arg(0, /*v=*/0);
   ctx.set_arg_ndarray(/*arg_id=*/1, arr.get_device_allocation_ptr_as_int(),
                       /*shape=*/arr.shape);
+  std::vector<int> vec = {1, 2, 3};
+  for (int i = 0; i < vec.size(); ++i) {
+    ctx.set_arg(/*arg_id=*/i + 2, vec[i]);
+  }
   k_run->launch(&ctx);
 
   auto *data = reinterpret_cast<int32_t *>(
       exec.get_ndarray_alloc_info_ptr(arr_devalloc));
   for (int i = 0; i < kArrLen; ++i) {
-    EXPECT_EQ(data[i], i);
+    EXPECT_EQ(data[i], i + vec[0]);
   }
 }
 
 TEST(LlvmAotTest, CudaKernel) {
+#ifdef TI_WITH_CUDA
   if (is_cuda_api_available()) {
     CompileConfig cfg;
     cfg.arch = Arch::cuda;
@@ -87,6 +97,10 @@ TEST(LlvmAotTest, CudaKernel) {
     ctx.set_arg(0, /*v=*/0);
     ctx.set_arg_ndarray(/*arg_id=*/1, arr.get_device_allocation_ptr_as_int(),
                         /*shape=*/arr.shape);
+    std::vector<int> vec = {1, 2, 3};
+    for (int i = 0; i < vec.size(); ++i) {
+      ctx.set_arg(/*arg_id=*/i + 2, vec[i]);
+    }
     k_run->launch(&ctx);
 
     auto *data = reinterpret_cast<int32_t *>(
@@ -97,10 +111,26 @@ TEST(LlvmAotTest, CudaKernel) {
         (void *)cpu_data.data(), (void *)data, kArrLen * sizeof(int32_t));
 
     for (int i = 0; i < kArrLen; ++i) {
-      EXPECT_EQ(cpu_data[i], i);
+      EXPECT_EQ(cpu_data[i], i + vec[0]);
     }
   }
+#endif
 }
 
-}  // namespace lang
-}  // namespace taichi
+#ifdef TI_WITH_DX12
+TEST(LlvmAotTest, DX12Kernel) {
+  directx12::AotModuleParams aot_params;
+  const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
+
+  std::stringstream aot_mod_ss;
+  aot_mod_ss << folder_dir;
+  aot_params.module_path = aot_mod_ss.str();
+  // FIXME: add executor.
+  auto mod = directx12::make_aot_module(aot_params, Arch::dx12);
+  auto *k_run = mod->get_kernel("run");
+  EXPECT_TRUE(k_run);
+  // FIXME: launch the kernel and check result.
+}
+#endif
+
+}  // namespace taichi::lang

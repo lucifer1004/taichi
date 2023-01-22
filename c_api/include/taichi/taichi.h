@@ -4,11 +4,18 @@
 
 #include "taichi/taichi_core.h"
 
-#if TI_WITH_VULKAN
-#define VK_NO_PROTOTYPES 1
+#ifdef TI_WITH_VULKAN
 #include "taichi/taichi_vulkan.h"
 #endif  // TI_WITH_VULKAN
 
-#if TI_WITH_OPENGL
+#ifdef TI_WITH_OPENGL
 #include "taichi/taichi_opengl.h"
-#endif
+#endif  // TI_WITH_OPENGL
+
+#ifdef TI_WITH_CUDA
+#include "taichi/taichi_cuda.h"
+#endif  // TI_WITH_CUDA
+
+#ifdef TI_WITH_CPU
+#include "taichi/taichi_cpu.h"
+#endif  // TI_WITH_CPU

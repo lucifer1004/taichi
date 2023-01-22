@@ -3,7 +3,7 @@
 #include "taichi/ui/utils/utils.h"
 #include "taichi/rhi/vulkan/vulkan_device.h"
 
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 namespace vulkan {
 
@@ -24,7 +24,9 @@ void Mesh::update_ubo(const MeshInfo &info, const Scene &scene) {
   ubo.use_per_vertex_color = info.renderable_info.has_per_vertex_color;
   ubo.two_sided = info.two_sided;
   ubo.has_attribute = info.mesh_attribute_info.has_attribute;
-  void *mapped = app_context_->device().map(uniform_buffer_);
+  void *mapped{nullptr};
+  TI_ASSERT(app_context_->device().map(uniform_buffer_, &mapped) ==
+            RhiResult::success);
   memcpy(mapped, &ubo, sizeof(ubo));
   app_context_->device().unmap(uniform_buffer_);
 }
@@ -69,7 +71,9 @@ void Mesh::update_data(const MeshInfo &info, const Scene &scene) {
   }
 
   {
-    void *mapped = app_context_->device().map(storage_buffer_);
+    void *mapped{nullptr};
+    TI_ASSERT(app_context_->device().map(storage_buffer_, &mapped) ==
+              RhiResult::success);
     memcpy(mapped, scene.point_lights_.data(), correct_ssbo_size);
     app_context_->device().unmap(storage_buffer_);
   }
@@ -88,18 +92,22 @@ void Mesh::update_data(const MeshInfo &info, const Scene &scene) {
       attr_dev_ptr =
           get_device_ptr(prog, info.mesh_attribute_info.mesh_attribute.snode);
     }
+    // TODO : At present, we donnot support copying from cuda device memory to a
+    // host-visible vulkan device memory directly on Windows platform, which is
+    // not a ideal way for handling storage buffer. So here we set the
+    // `mesh_ssbo` vulkan buffer as device-local memory using staging buffer
+    // filling data. However, that is not what is used to do for a storage
+    // buffer (usually set as host-visible memory), we should f`ix this on
+    // Windows in future.
     Device::MemcpyCapability memcpy_cap = Device::check_memcpy_capability(
         mesh_storage_buffer_.get_ptr(), attr_dev_ptr, mesh_ssbo_size_);
     if (memcpy_cap == Device::MemcpyCapability::Direct) {
       Device::memcpy_direct(mesh_storage_buffer_.get_ptr(), attr_dev_ptr,
                             mesh_ssbo_size_);
     } else if (memcpy_cap == Device::MemcpyCapability::RequiresStagingBuffer) {
-      void *ssbo_mapped = app_context_->device().map(mesh_storage_buffer_);
-      DeviceAllocation attr_buffer(attr_dev_ptr);
-      void *attr_mapped = attr_dev_ptr.device->map(attr_buffer);
-      memcpy(ssbo_mapped, attr_mapped, mesh_ssbo_size_);
-      app_context_->device().unmap(mesh_storage_buffer_);
-      attr_dev_ptr.device->unmap(attr_buffer);
+      Device::memcpy_via_staging(mesh_storage_buffer_.get_ptr(),
+                                 staging_vertex_buffer_.get_ptr(), attr_dev_ptr,
+                                 mesh_ssbo_size_);
     } else {
       TI_NOT_IMPLEMENTED;
     }
@@ -110,7 +118,8 @@ void Mesh::update_data(const MeshInfo &info, const Scene &scene) {
 
 void Mesh::record_this_frame_commands(taichi::lang::CommandList *command_list) {
   command_list->bind_pipeline(pipeline_.get());
-  command_list->bind_resources(pipeline_->resource_binder());
+  command_list->bind_raster_resources(raster_state_.get());
+  command_list->bind_shader_resources(resource_set_.get());
 
   if (indexed_) {
     command_list->draw_indexed_instance(
@@ -153,17 +162,17 @@ void Mesh::init_mesh(AppContext *app_context,
 
 void Mesh::create_bindings() {
   Renderable::create_bindings();
-  ResourceBinder *binder = pipeline_->resource_binder();
-  binder->buffer(0, 0, uniform_buffer_);
-  binder->rw_buffer(0, 1, storage_buffer_);
-  binder->rw_buffer(0, 2, mesh_storage_buffer_);
+  resource_set_->buffer(0, uniform_buffer_);
+  resource_set_->rw_buffer(1, storage_buffer_);
+  resource_set_->rw_buffer(2, mesh_storage_buffer_);
 }
 
 void Mesh::create_mesh_storage_buffers() {
   if (mesh_ssbo_size_ == 0) {
     mesh_ssbo_size_ = 4 * 4 * sizeof(float);
   }
-  Device::AllocParams sb_params{mesh_ssbo_size_, true, false, true,
+  Device::AllocParams sb_params{mesh_ssbo_size_, false, false,
+                                app_context_->requires_export_sharing(),
                                 AllocUsage::Storage};
   mesh_storage_buffer_ = app_context_->device().allocate_memory(sb_params);
 }
@@ -182,4 +191,4 @@ void Mesh::resize_mesh_storage_buffers(size_t ssbo_size) {
 
 }  // namespace vulkan
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui

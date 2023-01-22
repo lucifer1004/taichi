@@ -2,8 +2,7 @@
 
 #include "taichi/program/program.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace {
 void set_kernel_args(const std::vector<int> &I,
@@ -42,14 +41,14 @@ void SNodeRwAccessorsBank::Accessors::write_float(const std::vector<int> &I,
   set_kernel_args(I, snode_->num_active_indices, &launch_ctx);
   launch_ctx.set_arg_float(snode_->num_active_indices, val);
   prog_->synchronize();
-  (*writer_)(launch_ctx);
+  (*writer_)(prog_->compile_config(), launch_ctx);
 }
 
 float64 SNodeRwAccessorsBank::Accessors::read_float(const std::vector<int> &I) {
   prog_->synchronize();
   auto launch_ctx = reader_->make_launch_context();
   set_kernel_args(I, snode_->num_active_indices, &launch_ctx);
-  (*reader_)(launch_ctx);
+  (*reader_)(prog_->compile_config(), launch_ctx);
   prog_->synchronize();
   auto ret = reader_->get_ret_float(0);
   return ret;
@@ -62,14 +61,14 @@ void SNodeRwAccessorsBank::Accessors::write_int(const std::vector<int> &I,
   set_kernel_args(I, snode_->num_active_indices, &launch_ctx);
   launch_ctx.set_arg_int(snode_->num_active_indices, val);
   prog_->synchronize();
-  (*writer_)(launch_ctx);
+  (*writer_)(prog_->compile_config(), launch_ctx);
 }
 
 int64 SNodeRwAccessorsBank::Accessors::read_int(const std::vector<int> &I) {
   prog_->synchronize();
   auto launch_ctx = reader_->make_launch_context();
   set_kernel_args(I, snode_->num_active_indices, &launch_ctx);
-  (*reader_)(launch_ctx);
+  (*reader_)(prog_->compile_config(), launch_ctx);
   prog_->synchronize();
   auto ret = reader_->get_ret_int(0);
   return ret;
@@ -79,5 +78,4 @@ uint64 SNodeRwAccessorsBank::Accessors::read_uint(const std::vector<int> &I) {
   return (uint64)read_int(I);
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

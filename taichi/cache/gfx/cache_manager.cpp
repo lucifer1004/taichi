@@ -9,8 +9,7 @@
 #include "taichi/util/lock.h"
 #include "taichi/util/offline_cache.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace {
 
@@ -47,13 +46,6 @@ struct CacheCleanerUtils<gfx::CacheManager::Metadata> {
   using MetadataType = gfx::CacheManager::Metadata;
   using KernelMetaData = MetadataType::KernelMetadata;
 
-  // To load metadata from file
-  static bool load_metadata(const CacheCleanerConfig &config,
-                            MetadataType &result) {
-    return read_from_binary_file(
-        result, taichi::join_path(config.path, config.metadata_filename));
-  }
-
   // To save metadata as file
   static bool save_metadata(const CacheCleanerConfig &config,
                             const MetadataType &data) {
@@ -81,20 +73,14 @@ struct CacheCleanerUtils<gfx::CacheManager::Metadata> {
     return true;
   }
 
-  // To check version
-  static bool check_version(const CacheCleanerConfig &config,
-                            const Version &version) {
-    return version[0] == TI_VERSION_MAJOR && version[1] == TI_VERSION_MINOR &&
-           version[2] == TI_VERSION_PATCH;
-  }
-
   // To get cache files name
   static std::vector<std::string> get_cache_files(
       const CacheCleanerConfig &config,
       const KernelMetaData &kernel_meta) {
     std::vector<std::string> result;
     for (std::size_t i = 0; i < kernel_meta.num_files; ++i) {
-      result.push_back(kernel_meta.kernel_key + std::to_string(i) + ".spv");
+      result.push_back(kernel_meta.kernel_key + std::to_string(i) + "." +
+                       kSpirvCacheFilenameExt);
     }
     return result;
   }
@@ -106,6 +92,12 @@ struct CacheCleanerUtils<gfx::CacheManager::Metadata> {
         taichi::join_path(config.path, kDebuggingAotMetadataFilename));
     taichi::remove(taichi::join_path(config.path, kGraphMetadataFilename));
   }
+
+  // To check if a file is cache file
+  static bool is_valid_cache_file(const CacheCleanerConfig &config,
+                                  const std::string &name) {
+    return filename_extension(name) == kSpirvCacheFilenameExt;
+  }
 };
 
 }  // namespace offline_cache
@@ -115,44 +107,65 @@ namespace gfx {
 CacheManager::CacheManager(Params &&init_params)
     : mode_(init_params.mode),
       runtime_(init_params.runtime),
+      compile_config_(*init_params.compile_config),
       compiled_structs_(*init_params.compiled_structs) {
   TI_ASSERT(init_params.runtime);
-  TI_ASSERT(init_params.target_device);
+  TI_ASSERT(init_params.compile_config);
+  TI_ASSERT(init_params.compiled_structs);
 
   path_ = offline_cache::get_cache_path_by_arch(init_params.cache_path,
                                                 init_params.arch);
-
-  if (taichi::path_exists(taichi::join_path(path_, kAotMetadataFilename)) &&
-      taichi::path_exists(taichi::join_path(path_, kGraphMetadataFilename))) {
-    auto lock_path = taichi::join_path(path_, kMetadataFileLockName);
-    if (lock_with_file(lock_path)) {
-      auto _ = make_cleanup([&lock_path]() {
-        if (!unlock_with_file(lock_path)) {
-          TI_WARN("Unlock {} failed", lock_path);
+  {  // Load cached module with checking
+    using Error = offline_cache::LoadMetadataError;
+    using offline_cache::load_metadata_with_checking;
+    Metadata tmp;
+    auto filepath = taichi::join_path(path_, kOfflineCacheMetadataFilename);
+    if (load_metadata_with_checking(tmp, filepath) == Error::kNoError) {
+      auto lock_path = taichi::join_path(path_, kMetadataFileLockName);
+      auto exists =
+          taichi::path_exists(taichi::join_path(path_, kAotMetadataFilename)) &&
+          taichi::path_exists(taichi::join_path(path_, kGraphMetadataFilename));
+      if (exists) {
+        if (lock_with_file(lock_path)) {
+          auto _ = make_cleanup([&lock_path]() {
+            if (!unlock_with_file(lock_path)) {
+              TI_WARN(
+                  "Unlock {} failed. You can remove this .lock file manually "
+                  "and try again.",
+                  lock_path);
+            }
+          });
+          gfx::AotModuleParams params;
+          params.module_path = path_;
+          params.runtime = runtime_;
+          params.enable_lazy_loading = true;
+          cached_module_ = gfx::make_aot_module(params, init_params.arch);
+        } else {
+          TI_WARN(
+              "Lock {} failed. You can run 'ti cache clean -p {}' and try "
+              "again.",
+              lock_path, path_);
         }
-      });
-      gfx::AotModuleParams params;
-      params.module_path = path_;
-      params.runtime = runtime_;
-      cached_module_ = gfx::make_aot_module(params, init_params.arch);
+      }
     }
   }
 
   caching_module_builder_ = std::make_unique<gfx::AotModuleBuilderImpl>(
-      compiled_structs_, init_params.arch,
-      std::move(init_params.target_device));
+      compiled_structs_, init_params.arch, compile_config_,
+      std::move(init_params.caps));
 
   offline_cache_metadata_.version[0] = TI_VERSION_MAJOR;
   offline_cache_metadata_.version[1] = TI_VERSION_MINOR;
   offline_cache_metadata_.version[2] = TI_VERSION_PATCH;
 }
 
-CompiledKernelData CacheManager::load_or_compile(CompileConfig *config,
+CompiledKernelData CacheManager::load_or_compile(const CompileConfig *config,
                                                  Kernel *kernel) {
   if (kernel->is_evaluator) {
-    spirv::lower(kernel);
-    return gfx::run_codegen(kernel, runtime_->get_ti_device(),
-                            compiled_structs_);
+    spirv::lower(*config, kernel);
+    return gfx::run_codegen(kernel, runtime_->get_ti_device()->arch(),
+                            runtime_->get_ti_device()->get_caps(),
+                            compiled_structs_, *config);
   }
   std::string kernel_key = make_kernel_key(config, kernel);
   if (mode_ > NotCache) {
@@ -174,7 +187,10 @@ void CacheManager::dump_with_merging() const {
     if (lock_with_file(lock_path)) {
       auto _ = make_cleanup([&lock_path]() {
         if (!unlock_with_file(lock_path)) {
-          TI_WARN("Unlock {} failed", lock_path);
+          TI_WARN(
+              "Unlock {} failed. You can remove this .lock file manually and "
+              "try again.",
+              lock_path);
         }
       });
 
@@ -183,10 +199,12 @@ void CacheManager::dump_with_merging() const {
       cache_builder->dump(path_, "");
 
       // Update offline_cache_metadata.tcb
+      using offline_cache::load_metadata_with_checking;
+      using Error = offline_cache::LoadMetadataError;
       Metadata old_data;
       const auto filename =
           taichi::join_path(path_, kOfflineCacheMetadataFilename);
-      if (read_from_binary_file(old_data, filename)) {
+      if (load_metadata_with_checking(old_data, filename) == Error::kNoError) {
         for (auto &[k, v] : offline_cache_metadata_.kernels) {
           auto iter = old_data.kernels.find(k);
           if (iter != old_data.kernels.end()) {  // Update
@@ -234,7 +252,6 @@ std::optional<CompiledKernelData> CacheManager::try_load_cached_kernel(
   if (params_opt.has_value()) {
     TI_DEBUG("Create kernel '{}' from in-memory cache (key='{}')",
              kernel->get_name(), key);
-    kernel->mark_as_from_cache();
     // TODO: Support multiple SNodeTrees in AOT.
     params_opt->num_snode_trees = compiled_structs_.size();
     return params_opt;
@@ -244,7 +261,6 @@ std::optional<CompiledKernelData> CacheManager::try_load_cached_kernel(
     if (auto *aot_kernel = cached_module_->get_kernel(key)) {
       TI_DEBUG("Create kernel '{}' from cache (key='{}')", kernel->get_name(),
                key);
-      kernel->mark_as_from_cache();
       auto *aot_kernel_impl = static_cast<gfx::KernelImpl *>(aot_kernel);
       auto compiled = aot_kernel_impl->params();
       // TODO: Support multiple SNodeTrees in AOT.
@@ -277,7 +293,7 @@ CompiledKernelData CacheManager::compile_and_cache_kernel(
   return *params_opt;
 }
 
-std::string CacheManager::make_kernel_key(CompileConfig *config,
+std::string CacheManager::make_kernel_key(const CompileConfig *config,
                                           Kernel *kernel) const {
   if (mode_ < MemAndDiskCache) {
     return kernel->get_name();
@@ -291,5 +307,4 @@ std::string CacheManager::make_kernel_key(CompileConfig *config,
 }
 
 }  // namespace gfx
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

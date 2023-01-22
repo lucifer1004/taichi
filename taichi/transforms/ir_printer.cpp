@@ -8,7 +8,7 @@
 #include "taichi/ir/frontend_ir.h"
 #include "taichi/util/str.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 namespace {
 
@@ -44,8 +44,8 @@ class IRPrinter : public IRVisitor {
   std::string *output{nullptr};
   std::stringstream ss;
 
-  IRPrinter(ExpressionPrinter *expr_printer = nullptr,
-            std::string *output = nullptr)
+  explicit IRPrinter(ExpressionPrinter *expr_printer = nullptr,
+                     std::string *output = nullptr)
       : expr_printer_(expr_printer), output(output) {
   }
 
@@ -294,6 +294,18 @@ class IRPrinter : public IRVisitor {
     }
   }
 
+  void visit(FrontendFuncCallStmt *stmt) override {
+    std::string args;
+    for (int i = 0; i < stmt->args.exprs.size(); i++) {
+      if (i) {
+        args += ", ";
+      }
+      args += expr_to_string(stmt->args.exprs[i]);
+    }
+    print("{}${} = call \"{}\", args = ({}), ret = {}", stmt->type_hint(),
+          stmt->id, stmt->func->get_name(), args, stmt->ident->name());
+  }
+
   void visit(FuncCallStmt *stmt) override {
     std::vector<std::string> args;
     for (const auto &arg : stmt->args) {
@@ -377,6 +389,30 @@ class IRPrinter : public IRVisitor {
     print("}}");
   }
 
+  void visit(MatrixOfGlobalPtrStmt *stmt) override {
+    std::string s = fmt::format("{}{} = matrix of global ptr [",
+                                stmt->type_hint(), stmt->name());
+
+    for (int i = 0; i < (int)stmt->snodes.size(); i++) {
+      s += fmt::format("{}", stmt->snodes[i]->get_node_type_name_hinted());
+      if (i + 1 < (int)stmt->snodes.size()) {
+        s += ", ";
+      }
+    }
+    s += "], index [";
+    for (int i = 0; i < (int)stmt->indices.size(); i++) {
+      s += fmt::format("{}", stmt->indices[i]->name());
+      if (i + 1 < (int)stmt->indices.size()) {
+        s += ", ";
+      }
+    }
+    s += "]";
+
+    s += " activate=" + std::string(stmt->activate ? "true" : "false");
+
+    print_raw(s);
+  }
+
   void visit(GlobalPtrStmt *stmt) override {
     std::string s =
         fmt::format("{}{} = global ptr [", stmt->type_hint(), stmt->name());
@@ -402,7 +438,20 @@ class IRPrinter : public IRVisitor {
     print_raw(s);
   }
 
-  void visit(PtrOffsetStmt *stmt) override {
+  void visit(MatrixOfMatrixPtrStmt *stmt) override {
+    std::string s = fmt::format("{}{} = matrix of matrix ptr [",
+                                stmt->type_hint(), stmt->name());
+    for (int i = 0; i < (int)stmt->stmts.size(); i++) {
+      s += fmt::format("{}", stmt->stmts[i]->name());
+      if (i + 1 < (int)stmt->stmts.size()) {
+        s += ", ";
+      }
+    }
+    s += "]";
+    print_raw(s);
+  }
+
+  void visit(MatrixPtrStmt *stmt) override {
     std::string s =
         fmt::format("{}{} = shift ptr [{} + {}]", stmt->type_hint(),
                     stmt->name(), stmt->origin->name(), stmt->offset->name());
@@ -410,7 +459,12 @@ class IRPrinter : public IRVisitor {
   }
 
   void visit(ArgLoadStmt *stmt) override {
-    print("{}{} = arg[{}]", stmt->type_hint(), stmt->name(), stmt->arg_id);
+    if (!stmt->is_grad) {
+      print("{}{} = arg[{}]", stmt->type_hint(), stmt->name(), stmt->arg_id);
+    } else {
+      print("{}{} = grad_arg[{}]", stmt->type_hint(), stmt->name(),
+            stmt->arg_id);
+    }
   }
 
   void visit(TexturePtrStmt *stmt) override {
@@ -418,9 +472,16 @@ class IRPrinter : public IRVisitor {
   }
 
   void visit(TextureOpStmt *stmt) override {
-    print("<struct> {} = texture_{}({}, {}, {})", stmt->name(),
-          texture_op_type_name(stmt->op), stmt->args[0]->name(),
-          stmt->args[1]->name(), stmt->args[2]->name());
+    std::string args_string = "";
+    for (int i = 0; i < (int)stmt->args.size(); i++) {
+      args_string += fmt::format("{}", stmt->args[i]->name());
+      if (i + 1 < (int)stmt->args.size()) {
+        args_string += ", ";
+      }
+    }
+
+    print("<struct> {} = texture_{}({})", stmt->name(),
+          texture_op_type_name(stmt->op), args_string);
   }
 
   void visit(FrontendReturnStmt *stmt) override {
@@ -489,11 +550,6 @@ class IRPrinter : public IRVisitor {
           stmt->input->name(), stmt->offset);
   }
 
-  void visit(BitExtractStmt *stmt) override {
-    print("{}{} = bit_extract({}) bit_range=[{}, {})", stmt->type_hint(),
-          stmt->name(), stmt->input->name(), stmt->bit_begin, stmt->bit_end);
-  }
-
   void visit(GetRootStmt *stmt) override {
     if (stmt->root() == nullptr)
       print("{}{} = get root nullptr", stmt->type_hint(), stmt->name());
@@ -537,8 +593,9 @@ class IRPrinter : public IRVisitor {
       }
       s += ")";
     }
-    s += fmt::format(" element_dim={} layout={}", stmt->element_dim,
-                     (stmt->element_dim <= 0) ? "AOS" : "SOA");
+    s += fmt::format(" element_dim={} layout={} is_grad={}", stmt->element_dim,
+                     (stmt->element_dim <= 0) ? "AOS" : "SOA",
+                     stmt->base_ptr->as<ArgLoadStmt>()->is_grad);
 
     print(fmt::format("{}{} = external_ptr {}", stmt->type_hint(), stmt->name(),
                       s));
@@ -586,6 +643,8 @@ class IRPrinter : public IRVisitor {
     } else if (stmt->task_type == OffloadedTaskType::gc) {
       print("{} = offloaded garbage collect {}", stmt->name(),
             stmt->snode->get_node_type_name_hinted());
+    } else if (stmt->task_type == OffloadedTaskType::gc_rc) {
+      print("{} = offloaded garbage collect runtime context", stmt->name());
     } else {
       print("{} = offloaded {} ", stmt->name(), details);
       if (stmt->tls_prologue) {
@@ -779,6 +838,11 @@ class IRPrinter : public IRVisitor {
     print(result);
   }
 
+  void visit(GetElementStmt *stmt) override {
+    print("{}{} = get_element({}, {})", stmt->type_hint(), stmt->name(),
+          stmt->src->name(), fmt::join(stmt->index, ", "));
+  }
+
  private:
   std::string expr_to_string(Expr &expr) {
     return expr_to_string(expr.expr.get());
@@ -812,4 +876,4 @@ void print(IRNode *root, std::string *output) {
 
 }  // namespace irpass
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

@@ -6,11 +6,11 @@
 #include "taichi/util/file_sequence_writer.h"
 #include "llvm/Linker/Linker.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace wasm {
 
-AotModuleBuilderImpl::AotModuleBuilderImpl() : module_(nullptr) {
+AotModuleBuilderImpl::AotModuleBuilderImpl(const CompileConfig *compile_config)
+    : compile_config_(compile_config), module_(nullptr) {
   TI_AUTO_PROF
 }
 
@@ -37,7 +37,7 @@ void AotModuleBuilderImpl::dump(const std::string &output_dir,
 void AotModuleBuilderImpl::add_per_backend(const std::string &identifier,
                                            Kernel *kernel) {
   auto module_info =
-      KernelCodeGenWASM(kernel, nullptr).compile_kernel_to_module();
+      KernelCodeGenWASM(compile_config_, kernel).compile_kernel_to_module();
   if (module_) {
     llvm::Linker::linkModules(*module_, std::move(module_info.module),
                               llvm::Linker::OverrideFromSrc);
@@ -61,5 +61,4 @@ void AotModuleBuilderImpl::add_per_backend_tmpl(const std::string &identifier,
 }
 
 }  // namespace wasm
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

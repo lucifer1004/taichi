@@ -21,7 +21,7 @@
 #include "taichi/program/field_info.h"
 #include "taichi/ui/backends/vulkan/scene.h"
 
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 namespace vulkan {
 
@@ -31,29 +31,48 @@ class SceneLines final : public Renderable {
 
   void update_data(const SceneLinesInfo &info, const Scene &scene);
 
-  virtual void record_this_frame_commands(
+  void record_prepass_this_frame_commands(
+      taichi::lang::CommandList *command_list) override;
+
+  void record_this_frame_commands(
       taichi::lang::CommandList *command_list) override;
 
  private:
   struct UniformBufferObject {
     Scene::SceneUniformBuffer scene;
     alignas(16) glm::vec3 color;
-    int use_per_vertex_color;
+    float line_width;
+    int per_vertex_color_offset;
+    int vertex_stride;
+    int start_vertex;
+    int start_index;
+    int num_vertices;
+    int is_indexed;
+    float aspect_ratio;
   };
 
   void init_scene_lines(AppContext *app_context,
                         int vertices_count,
                         int indices_count);
 
-  void update_ubo(const SceneLinesInfo &info, const Scene &scene);
+  void create_graphics_pipeline() final;
 
-  virtual void cleanup() override;
+  void update_ubo(const SceneLinesInfo &info,
+                  const Scene &scene,
+                  float line_width);
 
-  virtual void create_bindings() override;
+  void cleanup() override;
 
-  float curr_width_;
+  void create_bindings() override;
+
+  uint64_t lines_count_{0};
+
+  std::unique_ptr<taichi::lang::Pipeline> quad_expand_pipeline_{nullptr};
+
+  std::unique_ptr<taichi::lang::DeviceAllocationGuard> vbo_translated_{nullptr};
+  std::unique_ptr<taichi::lang::DeviceAllocationGuard> ibo_translated_{nullptr};
 };
 
 }  // namespace vulkan
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui

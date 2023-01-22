@@ -74,6 +74,10 @@ class FieldsBuilder:
     def pointer(self, indices: Union[Sequence[_Axis], _Axis],
                 dimensions: Union[Sequence[int], int]):
         """Same as :func:`taichi.lang.snode.SNode.pointer`"""
+        if not _ti_core.is_extension_supported(impl.current_cfg().arch,
+                                               _ti_core.Extension.sparse):
+            raise TaichiRuntimeError(
+                "Pointer SNode is not supported on this backend.")
         self._check_not_finalized()
         self.empty = False
         return self.root.pointer(indices, dimensions)
@@ -87,6 +91,10 @@ class FieldsBuilder:
                 dimension: Union[Sequence[int], int],
                 chunk_size: Optional[int] = None):
         """Same as :func:`taichi.lang.snode.SNode.dynamic`"""
+        if not _ti_core.is_extension_supported(impl.current_cfg().arch,
+                                               _ti_core.Extension.sparse):
+            raise TaichiRuntimeError(
+                "Dynamic SNode is not supported on this backend.")
         self._check_not_finalized()
         self.empty = False
         return self.root.dynamic(index, dimension, chunk_size)
@@ -94,6 +102,10 @@ class FieldsBuilder:
     def bitmasked(self, indices: Union[Sequence[_Axis], _Axis],
                   dimensions: Union[Sequence[int], int]):
         """Same as :func:`taichi.lang.snode.SNode.bitmasked`"""
+        if not _ti_core.is_extension_supported(impl.current_cfg().arch,
+                                               _ti_core.Extension.sparse):
+            raise TaichiRuntimeError(
+                "Bitmasked SNode is not supported on this backend.")
         self._check_not_finalized()
         self.empty = False
         return self.root.bitmasked(indices, dimensions)

@@ -5,8 +5,7 @@
 #include "taichi/runtime/llvm/llvm_aot_module_builder.h"
 #include "taichi/aot/module_data.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace directx12 {
 
 struct ModuleDataDX12 : public aot::ModuleData {
@@ -15,7 +14,8 @@ struct ModuleDataDX12 : public aot::ModuleData {
 
 class AotModuleBuilderImpl : public AotModuleBuilder {
  public:
-  explicit AotModuleBuilderImpl(LlvmProgramImpl *prog);
+  explicit AotModuleBuilderImpl(const CompileConfig &config,
+                                LlvmProgramImpl *prog);
 
   void dump(const std::string &output_dir,
             const std::string &filename) const override;
@@ -35,12 +35,10 @@ class AotModuleBuilderImpl : public AotModuleBuilder {
                             const std::string &key,
                             Kernel *kernel) override;
 
-  void add_compiled_kernel(aot::Kernel *kernel) override;
-
+  const CompileConfig &config_;
   LlvmProgramImpl *prog;
   ModuleDataDX12 module_data;
 };
 
 }  // namespace directx12
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

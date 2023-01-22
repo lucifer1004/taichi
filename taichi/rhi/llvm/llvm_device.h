@@ -2,8 +2,10 @@
 
 #include "taichi/rhi/device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
+
+class JITModule;
+struct LLVMRuntime;
 
 class LlvmDevice : public Device {
  public:
@@ -14,6 +16,10 @@ class LlvmDevice : public Device {
     uint64 *result_buffer{nullptr};
   };
 
+  Arch arch() const override {
+    TI_NOT_IMPLEMENTED
+  }
+
   virtual DeviceAllocation allocate_memory_runtime(
       const LlvmRuntimeAllocParams &params) {
     TI_NOT_IMPLEMENTED;
@@ -23,5 +29,4 @@ class LlvmDevice : public Device {
       const LlvmRuntimeAllocParams &params);
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

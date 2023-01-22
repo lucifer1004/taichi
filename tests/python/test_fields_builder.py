@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 from taichi.lang.exception import TaichiRuntimeError
 
@@ -82,7 +83,7 @@ def test_fields_builder_dense():
         assert x[i] == i * 3
 
 
-@test_utils.test(arch=[ti.cpu, ti.cuda, ti.metal])
+@test_utils.test(arch=[ti.cpu, ti.cuda])
 def test_fields_builder_pointer():
     shape = 5
     fb1 = ti.FieldsBuilder()
@@ -195,7 +196,7 @@ def test_field_initialize_zero():
     assert b[0] == 0
 
 
-@test_utils.test(exclude=[ti.opengl, ti.cc])
+@test_utils.test(exclude=[ti.opengl, ti.gles, ti.cc])
 def test_field_builder_place_grad():
     @ti.kernel
     def mul(arr: ti.template(), out: ti.template()):
@@ -227,3 +228,14 @@ def test_field_builder_place_grad():
     mul.grad(arr, out)
     for i in range(10):
         assert arr.grad[i] == 2.0
+
+
+@test_utils.test(arch=ti.cpu)
+def test_fields_builder_numpy_dimension():
+    shape = np.int32(5)
+    fb = ti.FieldsBuilder()
+    x = ti.field(ti.f32)
+    y = ti.field(ti.i32)
+    fb.dense(ti.i, shape).place(x)
+    fb.pointer(ti.j, shape).place(y)
+    fb.finalize()

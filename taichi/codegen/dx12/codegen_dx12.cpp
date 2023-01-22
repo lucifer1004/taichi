@@ -1,3 +1,5 @@
+#include "llvm/IR/IntrinsicsDirectX.h"
+
 #include "taichi/codegen/dx12/codegen_dx12.h"
 #include "taichi/codegen/dx12/dx12_llvm_passes.h"
 #include "taichi/rhi/dx12/dx12_api.h"
@@ -8,11 +10,10 @@
 #include "taichi/program/program.h"
 #include "taichi/ir/ir.h"
 #include "taichi/ir/statements.h"
-#include "taichi/util/statistics.h"
 #include "taichi/ir/transforms.h"
 #include "taichi/ir/analysis.h"
 #include "taichi/analysis/offline_cache_util.h"
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 namespace {
 
@@ -20,30 +21,19 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
  public:
   using IRVisitor::visit;
 
-  TaskCodeGenLLVMDX12(Kernel *kernel, IRNode *ir)
-      : TaskCodeGenLLVM(kernel, ir, nullptr) {
+  TaskCodeGenLLVMDX12(const CompileConfig *config, Kernel *kernel, IRNode *ir)
+      : TaskCodeGenLLVM(config, kernel, ir, nullptr) {
     TI_AUTO_PROF
   }
 
   void create_offload_range_for(OffloadedStmt *stmt) override {
-    int step = 1;
+    auto tls_prologue = create_xlogue(stmt->tls_prologue);
 
-    // In parallel for-loops reversing the order doesn't make sense.
-    // However, we may need to support serial offloaded range for's in the
-    // future, so it still makes sense to reverse the order here.
-    if (stmt->reversed) {
-      step = -1;
-    }
-
-    auto *tls_prologue = create_xlogue(stmt->tls_prologue);
-
-    // The loop body
     llvm::Function *body;
     {
       auto guard = get_function_creation_guard(
           {llvm::PointerType::get(get_runtime_type("RuntimeContext"), 0),
-           llvm::Type::getInt8PtrTy(*llvm_context),
-           tlctx->get_data_type<int>()});
+           get_tls_buffer_type(), tlctx->get_data_type<int>()});
 
       auto loop_var = create_entry_block_alloca(PrimitiveType::i32);
       loop_vars_llvm[stmt].push_back(loop_var);
@@ -53,36 +43,21 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
       body = guard.body;
     }
 
-    llvm::Value *epilogue = create_xlogue(stmt->tls_epilogue);
+    auto epilogue = create_xlogue(stmt->tls_epilogue);
 
     auto [begin, end] = get_range_for_bounds(stmt);
-
-    // adaptive block_dim
-    if (prog->config.cpu_block_dim_adaptive) {
-      int num_items = (stmt->end_value - stmt->begin_value) / std::abs(step);
-      int num_threads = stmt->num_cpu_threads;
-      int items_per_thread = std::max(1, num_items / (num_threads * 32));
-      // keep each task has at least 512 items to amortize scheduler overhead
-      // also saturate the value to 1024 for better load balancing
-      stmt->block_dim = std::min(1024, std::max(512, items_per_thread));
-    }
-
-    create_call(
-        "gpu_parallel_range_for",
-        {get_arg(0), tlctx->get_constant(stmt->num_cpu_threads), begin, end,
-         tlctx->get_constant(step), tlctx->get_constant(stmt->block_dim),
-         tls_prologue, body, epilogue, tlctx->get_constant(stmt->tls_size)});
+    call("gpu_parallel_range_for", get_arg(0), begin, end, tls_prologue, body,
+         epilogue, tlctx->get_constant(stmt->tls_size));
   }
 
   void create_offload_mesh_for(OffloadedStmt *stmt) override {
-    auto *tls_prologue = create_mesh_xlogue(stmt->tls_prologue);
+    auto tls_prologue = create_mesh_xlogue(stmt->tls_prologue);
 
     llvm::Function *body;
     {
       auto guard = get_function_creation_guard(
           {llvm::PointerType::get(get_runtime_type("RuntimeContext"), 0),
-           llvm::Type::getInt8PtrTy(*llvm_context),
-           tlctx->get_data_type<int>()});
+           get_tls_buffer_type(), tlctx->get_data_type<int>()});
 
       for (int i = 0; i < stmt->mesh_prologue->size(); i++) {
         auto &s = stmt->mesh_prologue->statements[i];
@@ -91,6 +66,7 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
 
       if (stmt->bls_prologue) {
         stmt->bls_prologue->accept(this);
+        call("block_barrier");  // "__syncthreads()"
       }
 
       auto loop_test_bb =
@@ -99,21 +75,23 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
           llvm::BasicBlock::Create(*llvm_context, "loop_body", func);
       auto func_exit =
           llvm::BasicBlock::Create(*llvm_context, "func_exit", func);
-      auto loop_index =
-          create_entry_block_alloca(llvm::Type::getInt32Ty(*llvm_context));
-      builder->CreateStore(tlctx->get_constant(0), loop_index);
+      auto i32_ty = llvm::Type::getInt32Ty(*llvm_context);
+      auto loop_index = create_entry_block_alloca(i32_ty);
+      llvm::Value *thread_idx =
+          builder->CreateIntrinsic(llvm::Intrinsic::dx_thread_id_in_group,
+                                   {i32_ty}, {builder->getInt32(0)});
+      // FIXME: use correct block dim.
+      llvm::Value *block_dim =
+          builder->getInt32(64); /*builder->CreateIntrinsic(
+          llvm::Intrinsic::dx, {}, {});*/
+      builder->CreateStore(thread_idx, loop_index);
       builder->CreateBr(loop_test_bb);
 
       {
         builder->SetInsertPoint(loop_test_bb);
-#ifdef TI_LLVM_15
-        auto *loop_index_load =
-            builder->CreateLoad(builder->getInt32Ty(), loop_index);
-#else
-        auto *loop_index_load = builder->CreateLoad(loop_index);
-#endif
         auto cond = builder->CreateICmp(
-            llvm::CmpInst::Predicate::ICMP_SLT, loop_index_load,
+            llvm::CmpInst::Predicate::ICMP_SLT,
+            builder->CreateLoad(i32_ty, loop_index),
             llvm_val[stmt->owned_num_local.find(stmt->major_from_type)
                          ->second]);
         builder->CreateCondBr(cond, loop_body_bb, func_exit);
@@ -126,33 +104,27 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
           auto &s = stmt->body->statements[i];
           s->accept(this);
         }
-#ifdef TI_LLVM_15
-        auto *loop_index_load =
-            builder->CreateLoad(builder->getInt32Ty(), loop_index);
-#else
-        auto *loop_index_load = builder->CreateLoad(loop_index);
-#endif
         builder->CreateStore(
-            builder->CreateAdd(loop_index_load, tlctx->get_constant(1)),
+            builder->CreateAdd(builder->CreateLoad(i32_ty, loop_index),
+                               block_dim),
             loop_index);
         builder->CreateBr(loop_test_bb);
         builder->SetInsertPoint(func_exit);
       }
 
       if (stmt->bls_epilogue) {
+        call("block_barrier");  // "__syncthreads()"
         stmt->bls_epilogue->accept(this);
       }
 
       body = guard.body;
     }
 
-    llvm::Value *epilogue = create_mesh_xlogue(stmt->tls_epilogue);
+    auto tls_epilogue = create_mesh_xlogue(stmt->tls_epilogue);
 
-    create_call("gpu_parallel_mesh_for",
-                {get_arg(0), tlctx->get_constant(stmt->num_cpu_threads),
-                 tlctx->get_constant(stmt->mesh->num_patches),
-                 tlctx->get_constant(stmt->block_dim), tls_prologue, body,
-                 epilogue, tlctx->get_constant(stmt->tls_size)});
+    call("gpu_parallel_mesh_for", get_arg(0),
+         tlctx->get_constant(stmt->mesh->num_patches), tls_prologue, body,
+         tls_epilogue, tlctx->get_constant(stmt->tls_size));
   }
 
   void create_bls_buffer(OffloadedStmt *stmt) {
@@ -171,14 +143,13 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
   }
 
   void visit(OffloadedStmt *stmt) override {
-    stat.add("codegen_offloaded_tasks");
     TI_ASSERT(current_offload == nullptr);
     current_offload = stmt;
     if (stmt->bls_size > 0)
       create_bls_buffer(stmt);
     using Type = OffloadedStmt::TaskType;
     auto offloaded_task_name = init_offloaded_task_function(stmt);
-    if (prog->config.kernel_profiler && arch_is_cpu(prog->config.arch)) {
+    if (compile_config->kernel_profiler && arch_is_cpu(compile_config->arch)) {
       call(
           builder.get(), "LLVMRuntime_profiler_start",
           {get_runtime(), builder->CreateGlobalStringPtr(offloaded_task_name)});
@@ -200,7 +171,7 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
     } else {
       TI_NOT_IMPLEMENTED
     }
-    if (prog->config.kernel_profiler && arch_is_cpu(prog->config.arch)) {
+    if (compile_config->kernel_profiler && arch_is_cpu(compile_config->arch)) {
       llvm::IRBuilderBase::InsertPointGuard guard(*builder);
       builder->SetInsertPoint(final_block);
       call(builder.get(), "LLVMRuntime_profiler_stop", {get_runtime()});
@@ -227,7 +198,8 @@ class TaskCodeGenLLVMDX12 : public TaskCodeGenLLVM {
 #ifdef TI_WITH_LLVM
 
 static std::vector<uint8_t> generate_dxil_from_llvm(
-    LLVMCompiledData &compiled_data,
+    LLVMCompiledTask &compiled_data,
+    const CompileConfig *config,
     taichi::lang::Kernel *kernel) {
   // generate dxil from llvm ir.
   auto offloaded_local = compiled_data.tasks;
@@ -236,28 +208,22 @@ static std::vector<uint8_t> generate_dxil_from_llvm(
     llvm::Function *func = module->getFunction(task.name);
     TI_ASSERT(func);
     directx12::mark_function_as_cs_entry(func);
-    directx12::set_num_threads(
-        func, kernel->program->config.default_gpu_block_dim, 1, 1);
+    directx12::set_num_threads(func, config->default_gpu_block_dim, 1, 1);
     // FIXME: save task.block_dim like
     // tlctx->mark_function_as_cuda_kernel(func, task.block_dim);
   }
-  auto dx_container =
-      directx12::global_optimize_module(module, kernel->program->config);
+  auto dx_container = directx12::global_optimize_module(module, *config);
   // validate and sign dx container.
   return directx12::validate_and_sign(dx_container);
 }
 
 KernelCodeGenDX12::CompileResult KernelCodeGenDX12::compile() {
   TI_AUTO_PROF;
-  auto *llvm_prog = get_llvm_program(prog);
-  auto *tlctx = llvm_prog->get_llvm_context(kernel->arch);
-  auto &config = prog->config;
+  auto &config = *get_compile_config();
   std::string kernel_key = get_hashed_offline_cache_key(&config, kernel);
   kernel->set_kernel_key_for_cache(kernel_key);
 
-  if (!kernel->lowered()) {
-    kernel->lower(/*to_executable=*/false);
-  }
+  irpass::ast_to_ir(config, *kernel, false);
 
   auto block = dynamic_cast<Block *>(kernel->ir.get());
   TI_ASSERT(block);
@@ -266,14 +232,13 @@ KernelCodeGenDX12::CompileResult KernelCodeGenDX12::compile() {
 
   CompileResult Result;
   for (int i = 0; i < offloads.size(); i++) {
-    auto offload =
-        irpass::analysis::clone(offloads[i].get(), offloads[i]->get_kernel());
+    auto offload = irpass::analysis::clone(offloads[i].get());
     irpass::re_id(offload.get());
     auto *offload_stmt = offload->as<OffloadedStmt>();
-    auto new_data = compile_task(nullptr, offload_stmt);
+    auto new_data = compile_task(&config, nullptr, offload_stmt);
 
     Result.task_dxil_source_codes.emplace_back(
-        generate_dxil_from_llvm(new_data, kernel));
+        generate_dxil_from_llvm(new_data, &config, kernel));
     aot::CompiledOffloadedTask task;
     // FIXME: build all fields for task.
     task.name = fmt::format("{}_{}_{}", kernel->get_name(),
@@ -286,10 +251,11 @@ KernelCodeGenDX12::CompileResult KernelCodeGenDX12::compile() {
   return Result;
 }
 
-LLVMCompiledData KernelCodeGenDX12::compile_task(
+LLVMCompiledTask KernelCodeGenDX12::compile_task(
+    const CompileConfig *config,
     std::unique_ptr<llvm::Module> &&module,
     OffloadedStmt *stmt) {
-  TaskCodeGenLLVMDX12 gen(kernel, stmt);
+  TaskCodeGenLLVMDX12 gen(config, kernel, stmt);
   return gen.run_compilation();
 }
 #endif  // TI_WITH_LLVM
@@ -298,4 +264,4 @@ FunctionType KernelCodeGenDX12::compile_to_function() {
   // FIXME: implement compile_to_function.
   return [](RuntimeContext &ctx) {};
 }
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

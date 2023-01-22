@@ -10,8 +10,7 @@
 #include "taichi/rhi/device.h"
 #include "taichi/ir/statements.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace spirv {
 
 template <bool stop, std::size_t I, typename F>
@@ -87,6 +86,16 @@ struct Value {
   SType stype;
   // Additional flags about the value
   ValueKind flag{ValueKind::kNormal};
+
+  bool operator==(const Value &rhs) const {
+    return id == rhs.id;
+  }
+};
+
+struct ValueHasher {
+  size_t operator()(const spirv::Value &v) const {
+    return std::hash<uint32_t>()(v.id);
+  }
 };
 
 // Represent the SPIRV Label
@@ -205,13 +214,16 @@ class InstrBuilder {
 // Builder to build up a single SPIR-V module
 class IRBuilder {
  public:
-  IRBuilder(const Device *device) : device_(device) {
+  IRBuilder(Arch arch, const DeviceCapabilityConfig *caps)
+      : arch_(arch), caps_(caps) {
   }
 
   template <typename... Args>
-  void debug(spv::Op op, Args &&...args) {
-    ib_.begin(op).add_seq(std::forward<Args>(args)...).commit(&debug_);
+  void debug_name(spv::Op op, Args &&...args) {
+    ib_.begin(op).add_seq(std::forward<Args>(args)...).commit(&names_);
   }
+
+  Value debug_string(std::string str);
 
   template <typename... Args>
   void execution_mode(Value func, Args &&...args) {
@@ -328,6 +340,8 @@ class IRBuilder {
                          spv::StorageClass storage_class);
   // Get an image type
   SType get_sampled_image_type(const SType &primitive_type, int num_dimensions);
+  SType get_underlying_image_type(const SType &primitive_type,
+                                  int num_dimensions);
   SType get_storage_image_type(BufferFormat format, int num_dimensions);
   // Get a value_type[num_elems] type
   SType get_array_type(const SType &value_type, uint32_t num_elems);
@@ -393,7 +407,7 @@ class IRBuilder {
     for (const auto &arg : args) {
       ib_.add(arg);
     }
-    if (device_->get_cap(DeviceCapability::spirv_version) >= 0x10400) {
+    if (caps_->get(DeviceCapability::spirv_version) >= 0x10400) {
       for (const auto &v : global_values) {
         ib_.add(v);
       }
@@ -444,6 +458,7 @@ class IRBuilder {
   Value le(Value a, Value b);
   Value gt(Value a, Value b);
   Value ge(Value a, Value b);
+  Value bit_field_extract(Value base, Value offset, Value count);
   Value select(Value cond, Value a, Value b);
 
   // Create a cast that cast value to dst_type
@@ -458,6 +473,18 @@ class IRBuilder {
         .add_seq(std::forward<Args>(args)...)
         .commit(&function_);
     return val;
+  }
+
+  // Create a debugPrintf call
+  void call_debugprintf(std::string formats, const std::vector<Value> &args) {
+    Value format_str = debug_string(formats);
+    Value val = new_value(t_void_, ValueKind::kNormal);
+    ib_.begin(spv::OpExtInst)
+        .add_seq(t_void_, val, debug_printf_, 1, format_str);
+    for (const auto &arg : args) {
+      ib_.add(arg);
+    }
+    ib_.commit(&function_);
   }
 
   // Local allocate, load, store methods
@@ -539,7 +566,8 @@ class IRBuilder {
 
   void init_random_function(Value global_tmp_);
 
-  const Device *device_;
+  Arch arch_;
+  const DeviceCapabilityConfig *caps_;
 
   // internal instruction builder
   InstrBuilder ib_;
@@ -550,6 +578,9 @@ class IRBuilder {
 
   // glsl 450 extension
   Value ext_glsl450_;
+
+  // debugprint extension
+  Value debug_printf_;
 
   SType t_bool_;
   SType t_int8_;
@@ -589,6 +620,9 @@ class IRBuilder {
   // map from value to its pointer type
   std::map<std::pair<uint32_t, spv::StorageClass>, SType> pointer_type_tbl_;
   std::map<std::pair<uint32_t, int>, SType> sampled_image_ptr_tbl_;
+  std::map<std::pair<uint32_t, int>, SType>
+      sampled_image_underlying_image_type_;
+
   std::map<std::pair<BufferFormat, int>, SType> storage_image_ptr_tbl_;
 
   // map from constant int to its value
@@ -603,7 +637,17 @@ class IRBuilder {
   // Header segment
   std::vector<uint32_t> exec_mode_;
   // Debug segment
-  std::vector<uint32_t> debug_;
+  //   According to SPIR-V spec, the following debug instructions must be
+  //   grouped in the order:
+  //   - All OpString, OpSourceExtension, OpSource, and OpSourceContinued,
+  //   without forward references.
+  //   - All OpName and all OpMemberName.
+  //   - All OpModuleProcessed instructions.
+
+  // OpString segment
+  std::vector<uint32_t> strings_;
+  // OpName segment
+  std::vector<uint32_t> names_;
   // Annotation segment
   std::vector<uint32_t> decorate_;
   // Global segment: types, variables, types
@@ -614,5 +658,4 @@ class IRBuilder {
   std::vector<uint32_t> function_;
 };
 }  // namespace spirv
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

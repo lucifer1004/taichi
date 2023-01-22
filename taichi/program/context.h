@@ -4,8 +4,7 @@
 #include "taichi/inc/constants.h"
 
 #if defined(TI_RUNTIME_HOST)
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 #endif
 
 struct LLVMRuntime;
@@ -27,8 +26,11 @@ struct RuntimeContext {
   // - raw ptrs: for external array, or torch-based ndarray
   // - DeviceAllocation*: for taichi ndaray
   uint64 args[taichi_max_num_args_total];
+  uint64 grad_args[taichi_max_num_args_total];
   int32 extra_args[taichi_max_num_args_extra][taichi_max_num_indices];
   int32 cpu_thread_id;
+
+  bool has_grad[taichi_max_num_args_total];
 
   // Note that I've tried to group `array_runtime_size` and
   // `is_device_allocations` into a small struct. However, it caused some test
@@ -55,6 +57,11 @@ struct RuntimeContext {
     return taichi_union_cast_with_different_sizes<T>(args[i]);
   }
 
+  template <typename T>
+  T get_grad_arg(int i) {
+    return taichi_union_cast_with_different_sizes<T>(grad_args[i]);
+  }
+
   uint64 get_arg_as_uint64(int i) {
     return args[i];
   }
@@ -63,6 +70,11 @@ struct RuntimeContext {
   void set_arg(int i, T v) {
     args[i] = taichi_union_cast_with_different_sizes<uint64>(v);
     set_array_device_allocation_type(i, DevAllocType::kNone);
+  }
+
+  template <typename T>
+  void set_grad_arg(int i, T v) {
+    grad_args[i] = taichi_union_cast_with_different_sizes<uint64>(v);
   }
 
   void set_array_runtime_size(int i, uint64 size) {
@@ -83,9 +95,15 @@ struct RuntimeContext {
     set_array_device_allocation_type(arg_id, DevAllocType::kTexture);
   }
 
-  void set_arg_rw_texture(int arg_id, intptr_t alloc_ptr) {
+  void set_arg_rw_texture(int arg_id,
+                          intptr_t alloc_ptr,
+                          const std::array<int, 3> &shape) {
     args[arg_id] = taichi_union_cast_with_different_sizes<uint64>(alloc_ptr);
     set_array_device_allocation_type(arg_id, DevAllocType::kRWTexture);
+    TI_ASSERT(shape.size() <= taichi_max_num_indices);
+    for (int i = 0; i < shape.size(); i++) {
+      extra_args[arg_id][i] = shape[i];
+    }
   }
 
   void set_arg_external_array(int arg_id,
@@ -103,8 +121,22 @@ struct RuntimeContext {
 
   void set_arg_ndarray(int arg_id,
                        intptr_t devalloc_ptr,
-                       const std::vector<int> &shape) {
+                       const std::vector<int> &shape,
+                       bool has_grad = false,
+                       intptr_t devalloc_ptr_grad = 0) {
+    // Set has_grad value
+    this->has_grad[arg_id] = has_grad;
+
+    // Set args[arg_id] value
     args[arg_id] = taichi_union_cast_with_different_sizes<uint64>(devalloc_ptr);
+
+    // Set grad_args[arg_id] value
+    if (has_grad) {
+      grad_args[arg_id] =
+          taichi_union_cast_with_different_sizes<uint64>(devalloc_ptr_grad);
+    }
+
+    // Set device allocation type and runtime size
     set_array_device_allocation_type(arg_id, DevAllocType::kNdarray);
     TI_ASSERT(shape.size() <= taichi_max_num_indices);
     size_t total_size = 1;
@@ -118,6 +150,5 @@ struct RuntimeContext {
 };
 
 #if defined(TI_RUNTIME_HOST)
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang
 #endif

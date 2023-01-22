@@ -11,11 +11,11 @@
 template <typename T, typename G>
 T taichi_union_cast_with_different_sizes(G g);
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 class AotModuleBuilder;
 class Ndarray;
 class Texture;
+class Kernel;
 
 namespace aot {
 // Currently only scalar, matrix and ndarray are supported.
@@ -150,6 +150,7 @@ struct CompiledDispatch {
   std::string kernel_name;
   std::vector<Arg> symbolic_args;
   Kernel *compiled_kernel{nullptr};
+  taichi::lang::Kernel *ti_kernel{nullptr};
 
   TI_IO_DEF(kernel_name, symbolic_args);
 };
@@ -165,5 +166,4 @@ struct TI_DLL_EXPORT CompiledGraph {
 };
 
 }  // namespace aot
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

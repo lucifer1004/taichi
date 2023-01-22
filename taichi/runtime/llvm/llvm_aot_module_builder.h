@@ -4,12 +4,13 @@
 #include "taichi/runtime/llvm/llvm_offline_cache.h"
 #include "taichi/codegen/llvm/codegen_llvm.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class LlvmAotModuleBuilder : public AotModuleBuilder {
  public:
-  explicit LlvmAotModuleBuilder(LlvmProgramImpl *prog) : prog_(prog) {
+  explicit LlvmAotModuleBuilder(const CompileConfig *compile_config,
+                                LlvmProgramImpl *prog)
+      : compile_config_(compile_config), prog_(prog) {
   }
 
   void dump(const std::string &output_dir,
@@ -17,7 +18,7 @@ class LlvmAotModuleBuilder : public AotModuleBuilder {
 
  protected:
   void add_per_backend(const std::string &identifier, Kernel *kernel) override;
-  virtual LLVMCompiledData compile_kernel(Kernel *kernel) = 0;
+  virtual LLVMCompiledKernel compile_kernel(Kernel *kernel) = 0;
 
   void add_field_per_backend(const std::string &identifier,
                              const SNode *rep_snode,
@@ -27,16 +28,18 @@ class LlvmAotModuleBuilder : public AotModuleBuilder {
                              int row_num,
                              int column_num) override;
 
-  void add_compiled_kernel(aot::Kernel *kernel) override;
-
   const LlvmOfflineCache &get_cache() {
     return cache_;
   }
 
+  const CompileConfig *get_compile_config() const {
+    return compile_config_;
+  }
+
  private:
   mutable LlvmOfflineCache cache_;
+  const CompileConfig *compile_config_{nullptr};
   LlvmProgramImpl *prog_ = nullptr;
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

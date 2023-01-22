@@ -21,7 +21,7 @@
 #include "taichi/program/field_info.h"
 #include "taichi/ui/common/canvas_base.h"
 
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 namespace vulkan {
 
@@ -30,11 +30,14 @@ class Circles final : public Renderable {
   Circles(AppContext *app_context, VertexAttributes vbo_attrs);
   void update_data(const CirclesInfo &info);
 
+  void record_this_frame_commands(lang::CommandList *command_list) override;
+
  private:
   struct UniformBufferObject {
     alignas(16) glm::vec3 color;
     int use_per_vertex_color;
-    float radius;
+    float radius_w;
+    float radius_h;
   };
 
   void init_circles(AppContext *app_context,
@@ -43,9 +46,9 @@ class Circles final : public Renderable {
 
   void update_ubo(glm::vec3 color, bool use_per_vertex_color, float radius);
 
-  virtual void create_bindings() override;
+  void create_bindings() override;
 };
 
 }  // namespace vulkan
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui

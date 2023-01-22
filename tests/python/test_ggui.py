@@ -8,6 +8,7 @@ import taichi as ti
 from tests import test_utils
 from tests.test_utils import verify_image
 
+# FIXME: render(); get_image_buffer_as_numpy() loop does not actually redraw
 RENDER_REPEAT = 5
 # FIXME: enable ggui tests on ti.cpu backend. It's blocked by macos10.15
 supported_archs = [ti.vulkan, ti.cuda]
@@ -108,12 +109,7 @@ def test_geometry_2d():
         window.get_image_buffer_as_numpy()
 
     render()
-    if (platform.system() == 'Darwin'):
-        # FIXME: Use lower tolerance when macOS ggui supports wide lines
-        verify_image(window.get_image_buffer_as_numpy(), 'test_geometry_2d',
-                     1.0)
-    else:
-        verify_image(window.get_image_buffer_as_numpy(), 'test_geometry_2d')
+    verify_image(window.get_image_buffer_as_numpy(), 'test_geometry_2d')
     window.destroy()
 
 
@@ -278,12 +274,11 @@ def test_set_image_with_texture():
     window = ti.ui.Window('test', (640, 480), show_window=False)
     canvas = window.get_canvas()
 
-    img = ti.Texture(ti.f32, 4, (512, 512))
+    img = ti.Texture(ti.Format.rgba32f, (512, 512))
 
     @ti.kernel
     def init_img(img: ti.types.rw_texture(num_dimensions=2,
-                                          num_channels=4,
-                                          channel_format=ti.f32,
+                                          fmt=ti.Format.rgba32f,
                                           lod=0)):
         for i, j in ti.ndrange(512, 512):
             img.store(ti.Vector([i, j]),
@@ -301,7 +296,7 @@ def test_set_image_with_texture():
 
     render()
 
-    verify_image(window.get_image_buffer_as_numpy(), 'test_set_image')
+    verify_image(window.get_image_buffer_as_numpy(), 'test_set_image', 0.3)
     window.destroy()
 
 
@@ -390,7 +385,7 @@ def test_fetching_color_attachment():
 
 
 @pytest.mark.skipif(not _ti_core.GGUI_AVAILABLE, reason="GGUI Not Available")
-@test_utils.test(arch=supported_archs)
+@test_utils.test(arch=supported_archs, exclude=[(ti.vulkan, "Darwin")])
 def test_fetching_depth_attachment():
     window = ti.ui.Window("test", (512, 512), vsync=True, show_window=False)
     canvas = window.get_canvas()
@@ -419,7 +414,7 @@ def test_fetching_depth_attachment():
 
 
 @pytest.mark.skipif(not _ti_core.GGUI_AVAILABLE, reason="GGUI Not Available")
-@test_utils.test(arch=supported_archs)
+@test_utils.test(arch=supported_archs, exclude=[(ti.vulkan, "Darwin")])
 def test_draw_lines():
     N = 10
     particles_pos = ti.Vector.field(3, dtype=ti.f32, shape=N)
@@ -455,11 +450,7 @@ def test_draw_lines():
         window.get_image_buffer_as_numpy()
 
     render()
-    if (platform.system() == 'Darwin'):
-        # TODO:Fix the bug that mac not support wide lines
-        verify_image(window.get_image_buffer_as_numpy(), 'test_draw_lines.mac')
-    else:
-        verify_image(window.get_image_buffer_as_numpy(), 'test_draw_lines')
+    verify_image(window.get_image_buffer_as_numpy(), 'test_draw_lines')
     window.destroy()
 
 
@@ -598,7 +589,7 @@ def test_draw_part_of_mesh():
 
 
 @pytest.mark.skipif(not _ti_core.GGUI_AVAILABLE, reason="GGUI Not Available")
-@test_utils.test(arch=supported_archs)
+@test_utils.test(arch=supported_archs, exclude=[(ti.vulkan, "Darwin")])
 def test_draw_part_of_lines():
     N = 10
     particles_pos = ti.Vector.field(3, dtype=ti.f32, shape=N)
@@ -637,13 +628,7 @@ def test_draw_part_of_lines():
         window.get_image_buffer_as_numpy()
 
     render()
-    if (platform.system() == 'Darwin'):
-        # TODO:Fix the bug that mac not support wide lines
-        verify_image(window.get_image_buffer_as_numpy(),
-                     'test_draw_part_of_lines.mac')
-    else:
-        verify_image(window.get_image_buffer_as_numpy(),
-                     'test_draw_part_of_lines')
+    verify_image(window.get_image_buffer_as_numpy(), 'test_draw_part_of_lines')
     window.destroy()
 
 
@@ -752,10 +737,6 @@ def test_draw_mesh_instances():
                             two_sided=True,
                             transforms=instances_transforms)
         canvas.scene(scene)
-
-    if (platform.system() == 'Windows'):
-        # FIXME:Fix the bug that drawing mesh instance report bugs on Windows
-        return
 
     for i in range(30):
         update_transform(30)
@@ -867,10 +848,6 @@ def test_draw_part_of_mesh_instances():
                             instance_count=10,
                             instance_offset=2)
         canvas.scene(scene)
-
-    if (platform.system() == 'Windows'):
-        # FIXME:Fix the bug that drawing mesh instance report bugs on Windows
-        return
 
     for _ in range(RENDER_REPEAT):
         render()

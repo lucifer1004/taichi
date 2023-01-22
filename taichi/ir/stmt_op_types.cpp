@@ -2,8 +2,7 @@
 
 #include "taichi/common/logging.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 std::string unary_op_type_name(UnaryOpType type) {
   switch (type) {
 #define PER_UNARY_OP(i) \
@@ -137,6 +136,7 @@ std::string snode_op_type_name(SNodeOpType type) {
     REGISTER_TYPE(activate);
     REGISTER_TYPE(deactivate);
     REGISTER_TYPE(append);
+    REGISTER_TYPE(allocate);
     REGISTER_TYPE(clear);
     REGISTER_TYPE(undefined);
 
@@ -164,5 +164,4 @@ std::string texture_op_type_name(TextureOpType type) {
   }
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

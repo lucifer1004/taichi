@@ -1,15 +1,16 @@
 #include "taichi/rhi/vulkan/vulkan_common.h"
+#include "taichi/rhi/device.h"
 
-#include "taichi/util/lang_util.h"
 #include "taichi/rhi/vulkan/vulkan_loader.h"
-#include "taichi/common/logging.h"
 
-#if !defined(ANDROID)
+#ifdef __APPLE__
+// For `runtime_lib_dir()`
+#include "taichi/util/lang_util.h"
+// For `glfwInitVulkanLoader`
 #include "GLFW/glfw3.h"
 #endif
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace vulkan {
 
 VulkanLoader::VulkanLoader() {
@@ -44,7 +45,7 @@ bool VulkanLoader::check_vulkan_device() {
 
   do {
     if (res != VK_SUCCESS) {
-      TI_WARN("Can not create Vulkan instance");
+      RHI_LOG_ERROR("Can not create Vulkan instance");
       break;
     }
 
@@ -54,7 +55,7 @@ bool VulkanLoader::check_vulkan_device() {
     vkEnumeratePhysicalDevices(instance, &device_count, nullptr);
 
     if (device_count == 0) {
-      TI_WARN("Can not find Vulkan capable devices");
+      RHI_LOG_ERROR("Can not find Vulkan capable devices");
       break;
     }
 
@@ -88,9 +89,15 @@ bool VulkanLoader::check_vulkan_device() {
   return found_device_with_compute;
 }
 
-bool VulkanLoader::init() {
+bool VulkanLoader::init(PFN_vkGetInstanceProcAddr get_proc_addr) {
   std::call_once(init_flag_, [&]() {
-    if (initialized) {
+    if (initialized_) {
+      return;
+    }
+    // (penguinliong) So that MoltenVK instances can be imported.
+    if (get_proc_addr != nullptr) {
+      volkInitializeCustom(get_proc_addr);
+      initialized_ = true;
       return;
     }
 #if defined(__APPLE__)
@@ -101,14 +108,18 @@ bool VulkanLoader::init() {
             "vkGetInstanceProcAddr");
 
     volkInitializeCustom(get_proc_addr);
-    initialized = true;
+    initialized_ = true;
 #else
     VkResult result = volkInitialize();
-    initialized = result == VK_SUCCESS;
+    initialized_ = result == VK_SUCCESS;
 #endif
-    initialized = initialized && check_vulkan_device();
+    initialized_ = initialized_ && check_vulkan_device();
+    const char *id = std::getenv("TI_VISIBLE_DEVICE");
+    if (id) {
+      set_vulkan_visible_device(id);
+    }
   });
-  return initialized;
+  return initialized_;
 }
 
 void VulkanLoader::load_instance(VkInstance instance) {
@@ -123,7 +134,12 @@ void VulkanLoader::load_device(VkDevice device) {
 PFN_vkVoidFunction VulkanLoader::load_function(const char *name) {
   auto result =
       vkGetInstanceProcAddr(VulkanLoader::instance().vulkan_instance_, name);
-  TI_WARN_IF(result == nullptr, "loaded vulkan function {} is nullptr", name);
+  if (result == nullptr) {
+    char msg_buf[256];
+    snprintf(msg_buf, sizeof(msg_buf), "Failed to load vulkan function %s",
+             name);
+    RHI_LOG_ERROR(msg_buf);
+  }
   return result;
 }
 
@@ -136,5 +152,4 @@ void set_vulkan_visible_device(std::string id) {
 }
 
 }  // namespace vulkan
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

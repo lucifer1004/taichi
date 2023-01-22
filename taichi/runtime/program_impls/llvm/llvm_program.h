@@ -17,8 +17,7 @@ namespace llvm {
 class Module;
 }  // namespace llvm
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class StructCompiler;
 class Program;
@@ -41,7 +40,8 @@ class LlvmProgramImpl : public ProgramImpl {
 
   // TODO(zhanlue): compile-time runtime split for LLVM::CodeGen
   // For now, compile = codegen + convert
-  FunctionType compile(Kernel *kernel, OffloadedStmt *offloaded) override;
+  FunctionType compile(const CompileConfig &compile_config,
+                       Kernel *kernel) override;
 
   void compile_snode_tree_types(SNodeTree *tree) override;
 
@@ -51,7 +51,7 @@ class LlvmProgramImpl : public ProgramImpl {
   void materialize_snode_tree(SNodeTree *tree, uint64 *result_buffer) override;
 
   void cache_kernel(const std::string &kernel_key,
-                    const LLVMCompiledData &data,
+                    const LLVMCompiledKernel &data,
                     std::vector<LlvmLaunchArgInfo> &&args);
   ;
 
@@ -69,9 +69,8 @@ class LlvmProgramImpl : public ProgramImpl {
   std::unique_ptr<StructCompiler> compile_snode_tree_types_impl(
       SNodeTree *tree);
 
-  std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) override;
-
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder() override;
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) override;
 
   void dump_cache_data_to_disk() override;
 
@@ -157,6 +156,10 @@ class LlvmProgramImpl : public ProgramImpl {
 
   void maybe_initialize_cuda_llvm_context() {
     runtime_exec_->maybe_initialize_cuda_llvm_context();
+  }
+
+  void maybe_initialize_amdgpu_llvm_context() {
+    runtime_exec_->maybe_initialize_amdgpu_llvm_context();
   }
 
   uint64 fetch_result_uint64(int i, uint64 *result_buffer) override {
@@ -299,5 +302,4 @@ class LlvmProgramImpl : public ProgramImpl {
 
 LlvmProgramImpl *get_llvm_program(Program *prog);
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

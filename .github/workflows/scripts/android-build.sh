@@ -14,10 +14,10 @@ setup-sccache-local
 setup_python
 setup-android-ndk-env
 
+python -m pip install -r requirements_dev.txt
 python setup.py clean
 python setup.py build_ext
 cd build
-aarch64-linux-android-strip libtaichi_export_core.so
 aarch64-linux-android-strip libtaichi_c_api.so
 
 chmod -R 777 "$SCCACHE_DIR"

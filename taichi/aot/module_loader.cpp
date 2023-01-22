@@ -1,10 +1,9 @@
 #include "taichi/aot/module_loader.h"
 
 #include "taichi/runtime/gfx/aot_module_loader_impl.h"
-#include "taichi/runtime/metal/aot_module_loader_impl.h"
+#include "taichi/runtime/dx12/aot_module_loader_impl.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace aot {
 namespace {
 
@@ -38,13 +37,21 @@ std::unique_ptr<Module> Module::load(Arch arch, std::any mod_params) {
 #ifdef TI_WITH_OPENGL
     return gfx::make_aot_module(mod_params, arch);
 #endif
+  } else if (arch == Arch::gles) {
+#ifdef TI_WITH_OPENGL
+    return gfx::make_aot_module(mod_params, arch);
+#endif
   } else if (arch == Arch::dx11) {
 #ifdef TI_WITH_DX11
     return gfx::make_aot_module(mod_params, arch);
 #endif
+  } else if (arch == Arch::dx12) {
+#ifdef TI_WITH_DX12
+    return directx12::make_aot_module(mod_params, arch);
+#endif
   } else if (arch == Arch::metal) {
 #ifdef TI_WITH_METAL
-    return metal::make_aot_module(mod_params);
+    return gfx::make_aot_module(mod_params, arch);
 #endif
   }
   TI_NOT_IMPLEMENTED;
@@ -84,5 +91,4 @@ Field *Module::get_snode_tree(const std::string &name) {
 }
 
 }  // namespace aot
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

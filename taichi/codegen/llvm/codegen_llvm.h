@@ -12,8 +12,7 @@
 #include "taichi/codegen/llvm/llvm_compiled_data.h"
 #include "taichi/program/program.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class TaskCodeGenLLVM;
 
@@ -26,13 +25,15 @@ class FunctionCreationGuard {
   llvm::IRBuilder<>::InsertPoint ip;
 
   FunctionCreationGuard(TaskCodeGenLLVM *mb,
-                        std::vector<llvm::Type *> arguments);
+                        std::vector<llvm::Type *> arguments,
+                        const std::string &func_name);
 
   ~FunctionCreationGuard();
 };
 
 class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
  public:
+  const CompileConfig *compile_config{nullptr};
   Kernel *kernel;
   IRNode *ir;
   Program *prog;
@@ -60,6 +61,7 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
   bool returned{false};
   std::unordered_set<int> used_tree_ids;
   std::unordered_set<int> struct_for_tls_sizes;
+  Function *current_real_func{nullptr};
 
   std::unordered_map<const Stmt *, std::vector<llvm::Value *>> loop_vars_llvm;
 
@@ -68,12 +70,13 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
   using IRVisitor::visit;
   using LLVMModuleBuilder::call;
 
-  TaskCodeGenLLVM(Kernel *kernel,
-                  IRNode *ir = nullptr,
-                  std::unique_ptr<llvm::Module> &&module = nullptr);
+  explicit TaskCodeGenLLVM(const CompileConfig *config,
+                           Kernel *kernel,
+                           IRNode *ir = nullptr,
+                           std::unique_ptr<llvm::Module> &&module = nullptr);
 
   Arch current_arch() {
-    return kernel->arch;
+    return compile_config->arch;
   }
 
   void initialize_context();
@@ -102,6 +105,16 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
                              llvm::Value *node_meta,
                              SNode *snode);
 
+  void create_elementwise_binary(
+      BinaryOpStmt *stmt,
+      std::function<llvm::Value *(llvm::Value *lhs, llvm::Value *rhs)> f);
+
+  void create_elementwise_cast(
+      UnaryOpStmt *stmt,
+      llvm::Type *to_ty,
+      std::function<llvm::Value *(llvm::Value *, llvm::Type *)> f,
+      bool on_self = false);
+
   std::unique_ptr<RuntimeObject> emit_struct_meta_object(SNode *snode);
 
   llvm::Value *emit_struct_meta(SNode *snode);
@@ -115,15 +128,17 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
    *
    * After this call, `module` and `tasks` will be moved.
    *
-   * @return LLVMCompiledData
+   * @return LLVMCompiledTask
    */
-  virtual LLVMCompiledData run_compilation();
+  virtual LLVMCompiledTask run_compilation();
   // For debugging only
   virtual llvm::Value *create_print(std::string tag,
                                     DataType dt,
                                     llvm::Value *value);
 
   llvm::Value *create_print(std::string tag, llvm::Value *value);
+
+  void create_return(const std::vector<Stmt *> &elements);
 
   llvm::Value *cast_pointer(llvm::Value *val,
                             std::string dest_ty_name,
@@ -132,16 +147,8 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
   void emit_list_gen(OffloadedStmt *listgen);
 
   void emit_gc(OffloadedStmt *stmt);
+  void emit_gc_rc();
 
-  llvm::Value *create_call(llvm::Function *func,
-                           llvm::ArrayRef<llvm::Value *> args = {});
-
-  llvm::Value *create_call(llvm::Value *func,
-                           llvm::FunctionType *func_ty,
-                           llvm::ArrayRef<llvm::Value *> args = {});
-
-  llvm::Value *create_call(std::string func_name,
-                           llvm::ArrayRef<llvm::Value *> args = {});
   llvm::Value *call(SNode *snode,
                     llvm::Value *node_ptr,
                     const std::string &method,
@@ -233,7 +240,7 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
 
   void visit(GlobalPtrStmt *stmt) override;
 
-  void visit(PtrOffsetStmt *stmt) override;
+  void visit(MatrixPtrStmt *stmt) override;
 
   void store_quant_int(llvm::Value *ptr,
                        llvm::Type *physical_type,
@@ -287,8 +294,6 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
 
   void visit(GetRootStmt *stmt) override;
 
-  void visit(BitExtractStmt *stmt) override;
-
   void visit(LinearizeStmt *stmt) override;
 
   void visit(IntegerOffsetStmt *stmt) override;
@@ -315,7 +320,8 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
   void finalize_offloaded_task_function();
 
   FunctionCreationGuard get_function_creation_guard(
-      std::vector<llvm::Type *> argument_types);
+      std::vector<llvm::Type *> argument_types,
+      const std::string &func_name = "function_body");
 
   std::tuple<llvm::Value *, llvm::Value *> get_range_for_bounds(
       OffloadedStmt *stmt);
@@ -390,13 +396,22 @@ class TaskCodeGenLLVM : public IRVisitor, public LLVMModuleBuilder {
 
   void visit(FuncCallStmt *stmt) override;
 
+  void visit(GetElementStmt *stmt) override;
+
   llvm::Value *bitcast_from_u64(llvm::Value *val, DataType type);
   llvm::Value *bitcast_to_u64(llvm::Value *val, DataType type);
 
   ~TaskCodeGenLLVM() override = default;
+
+ private:
+  void create_return(llvm::Value *buffer,
+                     llvm::Type *buffer_type,
+                     const std::vector<Stmt *> &elements,
+                     const Type *current_type,
+                     int &current_element,
+                     std::vector<llvm::Value *> &current_index);
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang
 
 #endif  // #ifdef TI_WITH_LLVM

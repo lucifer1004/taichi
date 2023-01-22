@@ -9,8 +9,7 @@
 #include "taichi/ir/transforms.h"
 #include "taichi/rhi/device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class Kernel;
 class SNode;
@@ -29,6 +28,7 @@ struct TaskAttributes {
 
     BufferInfo() = default;
 
+    // NOLINTNEXTLINE(google-explicit-constructor)
     BufferInfo(BufferType buffer_type) : type(buffer_type) {
     }
 
@@ -177,7 +177,8 @@ class KernelContextAttributes {
   struct RetAttributes : public AttribsBase {};
 
   KernelContextAttributes() = default;
-  explicit KernelContextAttributes(const Kernel &kernel, Device *device);
+  explicit KernelContextAttributes(const Kernel &kernel,
+                                   const DeviceCapabilityConfig *caps);
 
   /**
    * Whether this kernel has any argument
@@ -274,5 +275,4 @@ struct TaichiKernelAttributes {
 };
 
 }  // namespace spirv
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

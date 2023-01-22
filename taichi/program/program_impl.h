@@ -10,8 +10,16 @@
 #include "taichi/rhi/device.h"
 #include "taichi/aot/graph_data.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
+
+// Represents an image resource reference for a compute/render Op
+struct ComputeOpImageRef {
+  DeviceAllocation image;
+  // The requested initial layout of the image, when Op is invoked
+  ImageLayout initial_layout;
+  // The final layout the image will be in once Op finishes
+  ImageLayout final_layout;
+};
 
 struct RuntimeContext;
 
@@ -22,12 +30,13 @@ class ProgramImpl {
   CompileConfig *config;
 
  public:
-  ProgramImpl(CompileConfig &config);
+  explicit ProgramImpl(CompileConfig &config);
 
   /**
    * Codegen to specific backend
    */
-  virtual FunctionType compile(Kernel *kernel, OffloadedStmt *offloaded) = 0;
+  virtual FunctionType compile(const CompileConfig &compile_config,
+                               Kernel *kernel) = 0;
 
   /**
    * Allocate runtime buffer, e.g result_buffer or backend specific runtime
@@ -67,14 +76,8 @@ class ProgramImpl {
   /**
    * Make a AotModulerBuilder, currently only supported by metal and wasm.
    */
-  virtual std::unique_ptr<AotModuleBuilder> make_aot_module_builder() = 0;
-
-  /**
-   * Compile a taichi::lang::Kernel to taichi::lang::aot::Kernel.
-   */
-  virtual std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) {
-    TI_NOT_IMPLEMENTED;
-  }
+  virtual std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) = 0;
 
   /**
    * Dump Offline-cache data to disk
@@ -103,6 +106,10 @@ class ProgramImpl {
     return kDeviceNullAllocation;
   }
 
+  virtual bool used_in_kernel(DeviceAllocationId) {
+    return false;
+  }
+
   virtual DeviceAllocation allocate_texture(const ImageParams &params) {
     return kDeviceNullAllocation;
   }
@@ -128,6 +135,12 @@ class ProgramImpl {
   virtual void prepare_runtime_context(RuntimeContext *ctx) {
   }
 
+  virtual void enqueue_compute_op_lambda(
+      std::function<void(Device *device, CommandList *cmdlist)> op,
+      const std::vector<ComputeOpImageRef> &image_refs) {
+    TI_NOT_IMPLEMENTED;
+  }
+
   virtual void print_memory_profiler_info(
       std::vector<std::unique_ptr<SNodeTree>> &snode_trees_,
       uint64 *result_buffer) {
@@ -149,5 +162,4 @@ class ProgramImpl {
  private:
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

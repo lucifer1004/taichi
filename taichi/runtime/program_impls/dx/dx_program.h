@@ -6,13 +6,13 @@
 #include "taichi/runtime/gfx/snode_tree_manager.h"
 #include "taichi/program/program_impl.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class Dx11ProgramImpl : public ProgramImpl {
  public:
   Dx11ProgramImpl(CompileConfig &config);
-  FunctionType compile(Kernel *kernel, OffloadedStmt *offloaded) override;
+  FunctionType compile(const CompileConfig &compile_config,
+                       Kernel *kernel) override;
 
   std::size_t get_snode_num_dynamically_allocated(
       SNode *snode,
@@ -36,7 +36,8 @@ class Dx11ProgramImpl : public ProgramImpl {
     return runtime_->flush();
   }
 
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder() override;
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) override;
 
   void destroy_snode_tree(SNodeTree *snode_tree) override {
     TI_ASSERT(snode_tree_mgr_ != nullptr);
@@ -62,8 +63,6 @@ class Dx11ProgramImpl : public ProgramImpl {
     return snode_tree_mgr_->get_snode_tree_device_ptr(tree_id);
   }
 
-  std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) override;
-
  private:
   std::shared_ptr<Device> device_{nullptr};
   std::unique_ptr<gfx::GfxRuntime> runtime_{nullptr};
@@ -71,7 +70,6 @@ class Dx11ProgramImpl : public ProgramImpl {
   std::vector<spirv::CompiledSNodeStructs> aot_compiled_snode_structs_;
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang
 
 #endif

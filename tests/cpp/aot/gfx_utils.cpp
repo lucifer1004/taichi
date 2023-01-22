@@ -2,14 +2,14 @@
 
 #include "taichi/runtime/gfx/aot_module_loader_impl.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace aot_test_utils {
 static void write_devalloc(taichi::lang::DeviceAllocation &alloc,
                            const void *data,
                            size_t size) {
-  char *const device_arr_ptr =
-      reinterpret_cast<char *>(alloc.device->map(alloc));
+  void *device_arr_ptr{nullptr};
+  TI_ASSERT(alloc.device->map(alloc, &device_arr_ptr) ==
+            taichi::lang::RhiResult::success);
   std::memcpy(device_arr_ptr, data, size);
   alloc.device->unmap(alloc);
 }
@@ -17,8 +17,9 @@ static void write_devalloc(taichi::lang::DeviceAllocation &alloc,
 static void load_devalloc(taichi::lang::DeviceAllocation &alloc,
                           void *data,
                           size_t size) {
-  char *const device_arr_ptr =
-      reinterpret_cast<char *>(alloc.device->map(alloc));
+  void *device_arr_ptr{nullptr};
+  TI_ASSERT(alloc.device->map(alloc, &device_arr_ptr) ==
+            taichi::lang::RhiResult::success);
   std::memcpy(data, device_arr_ptr, size);
   alloc.device->unmap(alloc);
 }
@@ -75,7 +76,7 @@ void run_dense_field_kernel(Arch arch, taichi::lang::Device *device) {
 
   // Retrieve kernels/fields/etc from AOT module
   auto root_size = vk_module->get_root_size();
-  EXPECT_EQ(root_size, 64);
+  EXPECT_EQ(root_size, 40);
   gfx_runtime->add_root_buffer(root_size);
 
   auto simple_ret_kernel = vk_module->get_kernel("simple_ret");
@@ -151,13 +152,19 @@ void run_kernel_test1(Arch arch, taichi::lang::Device *device) {
   host_ctx.set_arg(/*arg_id=*/0, /*base=*/0);
   host_ctx.set_arg_ndarray(/*arg_id=*/1, arr.get_device_allocation_ptr_as_int(),
                            /*shape=*/arr.shape);
+
+  // Hack to set vector/matrix args
+  std::vector<int> vec = {1, 2, 3};
+  for (int i = 0; i < vec.size(); ++i) {
+    host_ctx.set_arg(/*arg_id=*/i + 2, vec[i]);
+  }
   k_run->launch(&host_ctx);
   gfx_runtime->synchronize();
 
   int dst[size] = {0};
   load_devalloc(devalloc_arr_, dst, sizeof(dst));
   for (int i = 0; i < size; i++) {
-    EXPECT_EQ(dst[i], i);
+    EXPECT_EQ(dst[i], i + vec[0]);
   }
 
   // Deallocate
@@ -272,15 +279,18 @@ void run_cgraph1(Arch arch, taichi::lang::Device *device_) {
   alloc_params.host_read = true;
   alloc_params.size = size * sizeof(int);
   alloc_params.usage = taichi::lang::AllocUsage::Storage;
-  DeviceAllocation devalloc_arr_ = device_->allocate_memory(alloc_params);
-  Ndarray arr = Ndarray(devalloc_arr_, PrimitiveType::i32, {size}, {1});
+  DeviceAllocation devalloc_arr_0 = device_->allocate_memory(alloc_params);
+  DeviceAllocation devalloc_arr_1 = device_->allocate_memory(alloc_params);
+  Ndarray arr0 = Ndarray(devalloc_arr_0, PrimitiveType::i32, {size});
+  Ndarray arr1 = Ndarray(devalloc_arr_1, PrimitiveType::i32, {size}, {1});
 
   int base0 = 10;
   int base1 = 20;
   int base2 = 30;
 
   std::unordered_map<std::string, taichi::lang::aot::IValue> args;
-  args.insert({"arr", taichi::lang::aot::IValue::create(arr)});
+  args.insert({"arr0", taichi::lang::aot::IValue::create(arr0)});
+  args.insert({"arr1", taichi::lang::aot::IValue::create(arr1)});
   args.insert({"base0", taichi::lang::aot::IValue::create(base0)});
   args.insert({"base1", taichi::lang::aot::IValue::create(base1)});
   args.insert({"base2", taichi::lang::aot::IValue::create(base2)});
@@ -291,13 +301,18 @@ void run_cgraph1(Arch arch, taichi::lang::Device *device_) {
   gfx_runtime->synchronize();
 
   int dst[size] = {0};
-  load_devalloc(devalloc_arr_, dst, sizeof(dst));
+  load_devalloc(devalloc_arr_0, dst, sizeof(dst));
+  for (int i = 0; i < size; i++) {
+    EXPECT_EQ(dst[i], 3 * i + base0 + base1 + base2);
+  }
+  load_devalloc(devalloc_arr_1, dst, sizeof(dst));
   for (int i = 0; i < size; i++) {
     EXPECT_EQ(dst[i], 3 * i + base0 + base1 + base2);
   }
 
   // Deallocate
-  device_->dealloc_memory(devalloc_arr_);
+  device_->dealloc_memory(devalloc_arr_0);
+  device_->dealloc_memory(devalloc_arr_1);
 }
 
 void run_cgraph2(Arch arch, taichi::lang::Device *device_) {
@@ -475,5 +490,4 @@ void run_mpm88_graph(Arch arch, taichi::lang::Device *device_) {
   device_->dealloc_memory(devalloc_pos);
 }
 }  // namespace aot_test_utils
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

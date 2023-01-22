@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from pytest import approx
 from taichi.lang.simt import subgroup
 
@@ -269,6 +270,10 @@ def test_shfl_down_f32():
 
 @test_utils.test(arch=ti.cuda)
 def test_match_any():
+    # Skip match_any test for Pascal
+    if ti.lang.impl.get_cuda_compute_capability() < 70:
+        pytest.skip('match_any not supported on Pascal')
+
     a = ti.field(dtype=ti.i32, shape=32)
     b = ti.field(dtype=ti.u32, shape=32)
 
@@ -292,6 +297,10 @@ def test_match_any():
 
 @test_utils.test(arch=ti.cuda)
 def test_match_all():
+    # Skip match_all test for Pascal
+    if ti.lang.impl.get_cuda_compute_capability() < 70:
+        pytest.skip('match_all not supported on Pascal')
+
     a = ti.field(dtype=ti.i32, shape=32)
     b = ti.field(dtype=ti.u32, shape=32)
     c = ti.field(dtype=ti.u32, shape=32)
@@ -434,7 +443,7 @@ def _test_subgroup_reduce(op, group_op, np_op, size, initial_value, dtype):
 # i.e. any device other than a subgroup size of 1 should have one non active group
 
 
-@test_utils.test(arch=ti.vulkan)
+@test_utils.test(arch=ti.vulkan, exclude=[(ti.vulkan, "Darwin")])
 def test_subgroup_reduction_add_i32():
     _test_subgroup_reduce(ti.atomic_add, subgroup.reduce_add, np.sum, 2677, 0,
                           ti.i32)
@@ -451,7 +460,7 @@ def test_subgroup_reduction_add_f32():
 #     _test_subgroup_reduce(ti.atomic_add, subgroup.reduce_mul, np.prod, 8, 1, ti.f32)
 
 
-@test_utils.test(arch=ti.vulkan)
+@test_utils.test(arch=ti.vulkan, exclude=[(ti.vulkan, "Darwin")])
 def test_subgroup_reduction_max_i32():
     _test_subgroup_reduce(ti.atomic_max, subgroup.reduce_max, np.max, 2677, 0,
                           ti.i32)

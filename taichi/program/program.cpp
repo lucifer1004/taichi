@@ -6,7 +6,6 @@
 #include "taichi/program/extension.h"
 #include "taichi/codegen/cpu/codegen_cpu.h"
 #include "taichi/struct/struct.h"
-#include "taichi/runtime/metal/api.h"
 #include "taichi/runtime/wasm/aot_module_builder_impl.h"
 #include "taichi/runtime/program_impls/opengl/opengl_program.h"
 #include "taichi/runtime/program_impls/metal/metal_program.h"
@@ -17,7 +16,6 @@
 #include "taichi/ir/snode.h"
 #include "taichi/ir/frontend_ir.h"
 #include "taichi/program/snode_expr_utils.h"
-#include "taichi/util/statistics.h"
 #include "taichi/math/arithmetic.h"
 #ifdef TI_WITH_LLVM
 #include "taichi/runtime/program_impls/llvm/llvm_program.h"
@@ -39,14 +37,21 @@
 #include "taichi/runtime/program_impls/dx/dx_program.h"
 #include "taichi/rhi/dx/dx_api.h"
 #endif
+#ifdef TI_WITH_DX12
+#include "taichi/runtime/program_impls/dx12/dx12_program.h"
+#include "taichi/rhi/dx12/dx12_api.h"
+#endif
+#ifdef TI_WITH_METAL
+#include "taichi/runtime/program_impls/metal/metal_program.h"
+#include "taichi/rhi/metal/metal_api.h"
+#endif  // TI_WITH_METAL
 
-#if defined(TI_ARCH_x64)
+#if defined(_M_X64) || defined(__x86_64)
 // For _MM_SET_FLUSH_ZERO_MODE
 #include <xmmintrin.h>
-#endif
+#endif  // defined(_M_X64) || defined(__x86_64)
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 std::atomic<int> Program::num_instances_;
 
 Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
@@ -55,9 +60,10 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
   // For performance considerations and correctness of QuantFloatType
   // operations, we force floating-point operations to flush to zero on all
   // backends (including CPUs).
-#if defined(TI_ARCH_x64)
+#if defined(_M_X64) || defined(__x86_64)
   _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-#else
+#endif  // defined(_M_X64) || defined(__x86_64)
+#if defined(__arm64__) || defined(__aarch64__)
   // Enforce flush to zero on arm64 CPUs
   // https://developer.arm.com/documentation/100403/0201/register-descriptions/advanced-simd-and-floating-point-registers/aarch64-register-descriptions/fpcr--floating-point-control-register?lang=en
   std::uint64_t fpcr;
@@ -68,17 +74,26 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
                        :
                        : "ri"(fpcr | (1 << 24)));  // Bit 24 is FZ
   __asm__ __volatile__("");
-#endif
+#endif  // defined(__arm64__) || defined(__aarch64__)
+  auto &config = compile_config_;
   config = default_compile_config;
   config.arch = desired_arch;
-  // TODO: allow users to run in debug mode without out-of-bound checks
-  if (config.debug)
-    config.check_out_of_bound = true;
+  config.fit();
 
   profiler = make_profiler(config.arch, config.kernel_profiler);
   if (arch_uses_llvm(config.arch)) {
 #ifdef TI_WITH_LLVM
-    program_impl_ = std::make_unique<LlvmProgramImpl>(config, profiler.get());
+    if (config.arch != Arch::dx12) {
+      program_impl_ = std::make_unique<LlvmProgramImpl>(config, profiler.get());
+    } else {
+      // NOTE: use Dx12ProgramImpl to avoid using LlvmRuntimeExecutor for dx12.
+#ifdef TI_WITH_DX12
+      TI_ASSERT(directx12::is_dx12_api_available());
+      program_impl_ = std::make_unique<Dx12ProgramImpl>(config);
+#else
+      TI_ERROR("This taichi is not compiled with DX12");
+#endif
+    }
 #else
     TI_ERROR("This taichi is not compiled with LLVM");
 #endif
@@ -105,7 +120,14 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
 #endif
   } else if (config.arch == Arch::opengl) {
 #ifdef TI_WITH_OPENGL
-    TI_ASSERT(opengl::initialize_opengl(config.use_gles));
+    TI_ASSERT(opengl::initialize_opengl(false));
+    program_impl_ = std::make_unique<OpenglProgramImpl>(config);
+#else
+    TI_ERROR("This taichi is not compiled with OpenGL");
+#endif
+  } else if (config.arch == Arch::gles) {
+#ifdef TI_WITH_OPENGL
+    TI_ASSERT(opengl::initialize_opengl(true));
     program_impl_ = std::make_unique<OpenglProgramImpl>(config);
 #else
     TI_ERROR("This taichi is not compiled with OpenGL");
@@ -133,8 +155,6 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
   SNode::counter = 0;
 
   result_buffer = nullptr;
-  current_callable = nullptr;
-  sync = true;
   finalized_ = false;
 
   if (!is_extension_supported(config.arch, Extension::assertion)) {
@@ -144,8 +164,6 @@ Program::Program(Arch desired_arch) : snode_rw_accessors_bank_(this) {
       config.check_out_of_bound = false;
     }
   }
-
-  stat.clear();
 
   Timelines::get_instance().set_enabled(config.timeline);
 
@@ -168,10 +186,11 @@ Function *Program::create_function(const FunctionKey &func_key) {
   return functions_.back().get();
 }
 
-FunctionType Program::compile(Kernel &kernel, OffloadedStmt *offloaded) {
+FunctionType Program::compile(const CompileConfig &compile_config,
+                              Kernel &kernel) {
   auto start_t = Time::get_time();
   TI_AUTO_PROF;
-  auto ret = program_impl_->compile(&kernel, offloaded);
+  auto ret = program_impl_->compile(compile_config, &kernel);
   TI_ASSERT(ret);
   total_compilation_time_ += Time::get_time() - start_t;
   return ret;
@@ -183,8 +202,10 @@ void Program::materialize_runtime() {
 }
 
 void Program::destroy_snode_tree(SNodeTree *snode_tree) {
-  TI_ASSERT(arch_uses_llvm(config.arch) || config.arch == Arch::vulkan ||
-            config.arch == Arch::dx11);
+  TI_ASSERT(arch_uses_llvm(compile_config().arch) ||
+            compile_config().arch == Arch::vulkan ||
+            compile_config().arch == Arch::dx11 ||
+            compile_config().arch == Arch::dx12);
   program_impl_->destroy_snode_tree(snode_tree);
   free_snode_tree_ids_.push(snode_tree->id());
 }
@@ -217,11 +238,7 @@ void Program::check_runtime_error() {
 }
 
 void Program::synchronize() {
-  // Normal mode shouldn't be affected by `sync` flag.
-  if (arch_uses_llvm(config.arch) || config.arch == Arch::metal ||
-      config.arch == Arch::vulkan || config.arch == Arch::opengl) {
-    program_impl_->synchronize();
-  }
+  program_impl_->synchronize();
 }
 
 StreamSemaphore Program::flush() {
@@ -232,126 +249,25 @@ int Program::get_snode_tree_size() {
   return snode_trees_.size();
 }
 
-std::string capitalize_first(std::string s) {
-  s[0] = std::toupper(s[0]);
-  return s;
-}
-
-std::string latex_short_digit(int v) {
-  std::string units = "KMGT";
-  int unit_id = -1;
-  while (v >= 1024 && unit_id + 1 < (int)units.size()) {
-    TI_ASSERT(v % 1024 == 0);
-    v /= 1024;
-    unit_id++;
-  }
-  if (unit_id != -1)
-    return fmt::format("{}\\mathrm{{{}}}", v, units[unit_id]);
-  else
-    return std::to_string(v);
-}
-
-void Program::visualize_layout(const std::string &fn) {
-  {
-    std::ofstream ofs(fn);
-    TI_ASSERT(ofs);
-    auto emit = [&](std::string str) { ofs << str; };
-
-    auto header = R"(
-\documentclass[tikz, border=16pt]{standalone}
-\usepackage{latexsym}
-\usepackage{tikz-qtree,tikz-qtree-compat,ulem}
-\begin{document}
-\begin{tikzpicture}[level distance=40pt]
-\tikzset{level 1/.style={sibling distance=-5pt}}
-  \tikzset{edge from parent/.style={draw,->,
-    edge from parent path={(\tikzparentnode.south) -- +(0,-4pt) -| (\tikzchildnode)}}}
-  \tikzset{every tree node/.style={align=center, font=\small}}
-\Tree)";
-    emit(header);
-
-    std::function<void(SNode * snode)> visit = [&](SNode *snode) {
-      emit("[.{");
-      if (snode->type == SNodeType::place) {
-        emit(snode->name);
-      } else {
-        emit("\\textbf{" + capitalize_first(snode_type_name(snode->type)) +
-             "}");
-      }
-
-      std::string indices;
-      for (int i = 0; i < taichi_max_num_indices; i++) {
-        if (snode->extractors[i].active) {
-          int nb = snode->extractors[i].num_bits;
-          indices += fmt::format(
-              R"($\mathbf{{{}}}^{{\mathbf{{{}b}}:{}}}_{{\mathbf{{{}b}}:{}}}$)",
-              std::string(1, 'I' + i), 0, latex_short_digit(1 << 0), nb,
-              latex_short_digit(1 << nb));
-        }
-      }
-      if (!indices.empty())
-        emit("\\\\" + indices);
-      if (snode->type == SNodeType::place) {
-        emit("\\\\" + data_type_name(snode->dt));
-      }
-      emit("} ");
-
-      for (int i = 0; i < (int)snode->ch.size(); i++) {
-        visit(snode->ch[i].get());
-      }
-      emit("]");
-    };
-
-    for (auto &a : snode_trees_) {
-      visit(a->root());
-    }
-
-    auto tail = R"(
-\end{tikzpicture}
-\end{document}
-)";
-    emit(tail);
-  }
-  trash(system(fmt::format("pdflatex {}", fn).c_str()));
-}
-
-Arch Program::get_accessor_arch() {
-  if (config.arch == Arch::opengl) {
-    return Arch::opengl;
-  } else if (config.arch == Arch::vulkan) {
-    return Arch::vulkan;
-  } else if (config.arch == Arch::cuda) {
-    return Arch::cuda;
-  } else if (config.arch == Arch::metal) {
-    return Arch::metal;
-  } else if (config.arch == Arch::cc) {
-    return Arch::cc;
-  } else if (config.arch == Arch::dx11) {
-    return Arch::dx11;
-  } else if (config.arch == Arch::dx12) {
-    return Arch::dx12;
-  } else {
-    return get_host_arch();
-  }
-}
-
 Kernel &Program::get_snode_reader(SNode *snode) {
   TI_ASSERT(snode->type == SNodeType::place);
   auto kernel_name = fmt::format("snode_reader_{}", snode->id);
-  auto &ker = kernel([snode, this] {
+  auto &ker = kernel([snode, this](Kernel *kernel) {
     ExprGroup indices;
     for (int i = 0; i < snode->num_active_indices; i++) {
-      indices.push_back(Expr::make<ArgLoadExpression>(i, PrimitiveType::i32));
+      auto argload_expr = Expr::make<ArgLoadExpression>(i, PrimitiveType::i32);
+      argload_expr->type_check(&this->compile_config());
+      indices.push_back(std::move(argload_expr));
     }
-    auto ret = Stmt::make<FrontendReturnStmt>(
-        ExprGroup(Expr(snode_to_fields_.at(snode))[indices]));
-    this->current_ast_builder()->insert(std::move(ret));
+    ASTBuilder &builder = kernel->context->builder();
+    auto ret = Stmt::make<FrontendReturnStmt>(ExprGroup(
+        builder.expr_subscript(Expr(snode_to_fields_.at(snode)), indices)));
+    builder.insert(std::move(ret));
   });
-  ker.set_arch(get_accessor_arch());
   ker.name = kernel_name;
   ker.is_accessor = true;
   for (int i = 0; i < snode->num_active_indices; i++)
-    ker.insert_scalar_arg(PrimitiveType::i32);
+    ker.insert_scalar_param(PrimitiveType::i32);
   ker.insert_ret(snode->dt);
   return ker;
 }
@@ -359,24 +275,27 @@ Kernel &Program::get_snode_reader(SNode *snode) {
 Kernel &Program::get_snode_writer(SNode *snode) {
   TI_ASSERT(snode->type == SNodeType::place);
   auto kernel_name = fmt::format("snode_writer_{}", snode->id);
-  auto &ker = kernel([snode, this] {
+  auto &ker = kernel([snode, this](Kernel *kernel) {
     ExprGroup indices;
     for (int i = 0; i < snode->num_active_indices; i++) {
-      indices.push_back(Expr::make<ArgLoadExpression>(i, PrimitiveType::i32));
+      auto argload_expr = Expr::make<ArgLoadExpression>(i, PrimitiveType::i32);
+      argload_expr->type_check(&this->compile_config());
+      indices.push_back(std::move(argload_expr));
     }
-    auto expr = Expr(snode_to_fields_.at(snode))[indices];
-    this->current_ast_builder()->insert_assignment(
+    ASTBuilder &builder = kernel->context->builder();
+    auto expr =
+        builder.expr_subscript(Expr(snode_to_fields_.at(snode)), indices);
+    builder.insert_assignment(
         expr,
         Expr::make<ArgLoadExpression>(snode->num_active_indices,
                                       snode->dt->get_compute_type()),
         expr->tb);
   });
-  ker.set_arch(get_accessor_arch());
   ker.name = kernel_name;
   ker.is_accessor = true;
   for (int i = 0; i < snode->num_active_indices; i++)
-    ker.insert_scalar_arg(PrimitiveType::i32);
-  ker.insert_scalar_arg(snode->dt);
+    ker.insert_scalar_param(PrimitiveType::i32);
+  ker.insert_scalar_param(snode->dt);
   return ker;
 }
 
@@ -389,45 +308,11 @@ void Program::finalize() {
     return;
   }
   synchronize();
-
   TI_TRACE("Program finalizing...");
-  if (config.print_benchmark_stat) {
-    const char *current_test = std::getenv("PYTEST_CURRENT_TEST");
-    const char *output_dir = std::getenv("TI_BENCHMARK_OUTPUT_DIR");
-    if (current_test != nullptr) {
-      if (output_dir == nullptr)
-        output_dir = ".";
-      std::string file_name = current_test;
-      auto slash_pos = file_name.find_last_of('/');
-      if (slash_pos != std::string::npos)
-        file_name = file_name.substr(slash_pos + 1);
-      auto py_pos = file_name.find(".py::");
-      TI_ASSERT(py_pos != std::string::npos);
-      file_name =
-          file_name.substr(0, py_pos) + "__" + file_name.substr(py_pos + 5);
-      auto first_space_pos = file_name.find_first_of(' ');
-      TI_ASSERT(first_space_pos != std::string::npos);
-      file_name = file_name.substr(0, first_space_pos);
-      if (auto lt_pos = file_name.find('<'); lt_pos != std::string::npos) {
-        file_name[lt_pos] = '_';
-      }
-      if (auto gt_pos = file_name.find('>'); gt_pos != std::string::npos) {
-        file_name[gt_pos] = '_';
-      }
-      file_name += ".dat";
-      file_name = std::string(output_dir) + "/" + file_name;
-      TI_INFO("Saving benchmark result to {}", file_name);
-      std::ofstream ofs(file_name);
-      TI_ASSERT(ofs);
-      std::string stat_string;
-      stat.print(&stat_string);
-      ofs << stat_string;
-    }
-  }
 
   synchronize();
   memory_pool_->terminate();
-  if (arch_uses_llvm(config.arch)) {
+  if (arch_uses_llvm(compile_config().arch)) {
     program_impl_->finalize();
   }
 
@@ -436,6 +321,7 @@ void Program::finalize() {
   finalized_ = true;
   num_instances_ -= 1;
   program_impl_->dump_cache_data_to_disk();
+  compile_config_ = default_compile_config;
   TI_TRACE("Program ({}) finalized_.", fmt::ptr(this));
 }
 
@@ -452,17 +338,52 @@ void Program::print_memory_profiler_info() {
 }
 
 std::size_t Program::get_snode_num_dynamically_allocated(SNode *snode) {
-  TI_ASSERT(arch_uses_llvm(config.arch) || config.arch == Arch::metal ||
-            config.arch == Arch::vulkan || config.arch == Arch::opengl);
   return program_impl_->get_snode_num_dynamically_allocated(snode,
                                                             result_buffer);
 }
 
 Ndarray *Program::create_ndarray(const DataType type,
                                  const std::vector<int> &shape,
-                                 ExternalArrayLayout layout) {
-  ndarrays_.emplace_back(std::make_unique<Ndarray>(this, type, shape, layout));
-  return ndarrays_.back().get();
+                                 ExternalArrayLayout layout,
+                                 bool zero_fill) {
+  auto arr = std::make_unique<Ndarray>(this, type, shape, layout);
+  if (zero_fill) {
+    Arch arch = compile_config().arch;
+    if (arch_is_cpu(arch) || arch == Arch::cuda) {
+      fill_ndarray_fast_u32(arr.get(), /*data=*/0);
+    } else if (arch != Arch::dx12) {
+      // Device api support for dx12 backend are not complete yet
+      Stream *stream =
+          program_impl_->get_compute_device()->get_compute_stream();
+      auto [cmdlist, res] = stream->new_command_list_unique();
+      TI_ASSERT(res == RhiResult::success);
+      cmdlist->buffer_fill(arr->ndarray_alloc_.get_ptr(0),
+                           arr->get_element_size() * arr->get_nelement(),
+                           /*data=*/0);
+      stream->submit_synced(cmdlist.get());
+    }
+  }
+  auto arr_ptr = arr.get();
+  ndarrays_.insert({arr_ptr, std::move(arr)});
+  return arr_ptr;
+}
+
+void Program::delete_ndarray(Ndarray *ndarray) {
+  // [Note] Ndarray memory deallocation
+  // Ndarray's memory allocation is managed by Taichi and Python can control
+  // this via Taichi indirectly. For example, when an ndarray is GC-ed in
+  // Python, it signals Taichi to free its memory allocation. But Taichi will
+  // make sure **no pending kernels to be executed needs the ndarray** before it
+  // actually frees the memory. When `ti.reset()` is called, all ndarrays
+  // allocated in this program should be gone and no longer valid in Python.
+  // This isn't the best implementation, ndarrays should be managed by taichi
+  // runtime instead of this giant program and it should be freed when:
+  // - Python GC signals taichi that it's no longer useful
+  // - All kernels using it are executed.
+  if (ndarrays_.count(ndarray) &&
+      !program_impl_->used_in_kernel(ndarray->ndarray_alloc_.alloc_id)) {
+    ndarrays_.erase(ndarray);
+  }
 }
 
 Texture *Program::create_texture(const DataType type,
@@ -486,7 +407,8 @@ Texture *Program::create_texture(const DataType type,
 
 intptr_t Program::get_ndarray_data_ptr_as_int(const Ndarray *ndarray) {
   uint64_t *data_ptr{nullptr};
-  if (arch_is_cpu(config.arch) || config.arch == Arch::cuda) {
+  if (arch_is_cpu(compile_config().arch) ||
+      compile_config().arch == Arch::cuda) {
     // For the LLVM backends, device allocation is a physical pointer.
     data_ptr =
         program_impl_->get_ndarray_alloc_info_ptr(ndarray->ndarray_alloc_);
@@ -495,33 +417,85 @@ intptr_t Program::get_ndarray_data_ptr_as_int(const Ndarray *ndarray) {
   return reinterpret_cast<intptr_t>(data_ptr);
 }
 
-void Program::fill_ndarray_fast(Ndarray *ndarray, uint32_t val) {
+void Program::fill_ndarray_fast_u32(Ndarray *ndarray, uint32_t val) {
   // This is a temporary solution to bypass device api.
   // Should be moved to CommandList once available in CUDA.
   program_impl_->fill_ndarray(
       ndarray->ndarray_alloc_,
-      ndarray->get_nelement() * ndarray->get_element_size(), val);
+      ndarray->get_nelement() * ndarray->get_element_size() / sizeof(uint32_t),
+      val);
 }
 
 Program::~Program() {
   finalize();
 }
 
-std::unique_ptr<AotModuleBuilder> Program::make_aot_module_builder(Arch arch) {
+DeviceCapabilityConfig translate_devcaps(const std::vector<std::string> &caps) {
+  // Each device capability assignment is named like this:
+  // - `spirv_version=1.3`
+  // - `spirv_has_int8`
+  DeviceCapabilityConfig cfg{};
+  for (const std::string &cap : caps) {
+    std::string_view key;
+    std::string_view value;
+    size_t ieq = cap.find('=');
+    if (ieq == std::string::npos) {
+      key = cap;
+    } else {
+      key = std::string_view(cap.c_str(), ieq);
+      value = std::string_view(cap.c_str() + ieq + 1);
+    }
+    DeviceCapability devcap = str2devcap(key);
+    switch (devcap) {
+      case DeviceCapability::spirv_version: {
+        if (value == "1.3") {
+          cfg.set(devcap, 0x10300);
+        } else if (value == "1.4") {
+          cfg.set(devcap, 0x10400);
+        } else if (value == "1.5") {
+          cfg.set(devcap, 0x10500);
+        } else {
+          TI_ERROR(
+              "'{}' is not a valid value of device capability `spirv_version`",
+              value);
+        }
+        break;
+      }
+      default:
+        cfg.set(devcap, 1);
+        break;
+    }
+  }
+
+  // Assign default caps (that always present).
+  if (!cfg.contains(DeviceCapability::spirv_version)) {
+    cfg.set(DeviceCapability::spirv_version, 0x10300);
+  }
+  return cfg;
+}
+
+std::unique_ptr<AotModuleBuilder> Program::make_aot_module_builder(
+    Arch arch,
+    const std::vector<std::string> &caps) {
+  DeviceCapabilityConfig cfg = translate_devcaps(caps);
   // FIXME: This couples the runtime backend with the target AOT backend. E.g.
   // If we want to build a Metal AOT module, we have to be on the macOS
   // platform. Consider decoupling this part
   if (arch == Arch::wasm) {
     // Have to check WASM first, or it dispatches to the LlvmProgramImpl.
 #ifdef TI_WITH_LLVM
-    return std::make_unique<wasm::AotModuleBuilderImpl>();
+    return std::make_unique<wasm::AotModuleBuilderImpl>(&compile_config());
 #else
     TI_NOT_IMPLEMENTED
 #endif
   }
-  if (arch_uses_llvm(config.arch) || config.arch == Arch::metal ||
-      config.arch == Arch::vulkan || config.arch == Arch::opengl) {
-    return program_impl_->make_aot_module_builder();
+  if (arch_uses_llvm(compile_config().arch) ||
+      compile_config().arch == Arch::metal ||
+      compile_config().arch == Arch::vulkan ||
+      compile_config().arch == Arch::opengl ||
+      compile_config().arch == Arch::gles ||
+      compile_config().arch == Arch::dx12) {
+    return program_impl_->make_aot_module_builder(cfg);
   }
   return nullptr;
 }
@@ -541,5 +515,10 @@ void Program::prepare_runtime_context(RuntimeContext *ctx) {
   program_impl_->prepare_runtime_context(ctx);
 }
 
-}  // namespace lang
-}  // namespace taichi
+void Program::enqueue_compute_op_lambda(
+    std::function<void(Device *device, CommandList *cmdlist)> op,
+    const std::vector<ComputeOpImageRef> &image_refs) {
+  program_impl_->enqueue_compute_op_lambda(op, image_refs);
+}
+
+}  // namespace taichi::lang

@@ -2,8 +2,7 @@
 #include "taichi/ir/snode.h"
 #include "taichi/ir/frontend_ir.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace {
 
@@ -57,7 +56,7 @@ void place_child(Expr *expr_arg,
                  SNodeFieldMap *snode_to_exprs) {
   if (parent->type == SNodeType::root) {
     // never directly place to root
-    auto &ds = parent->dense(std::vector<Axis>(), {}, false);
+    auto &ds = parent->dense(std::vector<Axis>(), {}, "");
     place_child(expr_arg, offset, id_in_bit_struct, &ds, snode_to_exprs);
   } else {
     TI_ASSERT(expr_arg->is<FieldExpression>());
@@ -101,5 +100,4 @@ void make_lazy_place(SNode *snode,
   }
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

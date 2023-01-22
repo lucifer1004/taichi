@@ -4,14 +4,12 @@
 #include <unordered_map>
 #include <mutex>
 
-#include "taichi/util/lang_util.h"
-#include "taichi/program/program.h"
 #include "taichi/system/threading.h"
 #include "taichi/rhi/cuda/cuda_driver.h"
 #include "taichi/rhi/cuda/cuda_profiler.h"
-#include "taichi/analysis/offline_cache_util.h"
+#include "taichi/util/offline_cache.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 CUDAContext::CUDAContext()
     : profiler_(nullptr), driver_(CUDADriver::get_instance_without_context()) {
@@ -77,6 +75,7 @@ std::string CUDAContext::get_device_name() {
 void CUDAContext::launch(void *func,
                          const std::string &task_name,
                          std::vector<void *> arg_pointers,
+                         std::vector<int> arg_sizes,
                          unsigned grid_dim,
                          unsigned block_dim,
                          std::size_t dynamic_shared_mem_bytes) {
@@ -141,4 +140,4 @@ CUDAContext &CUDAContext::get_instance() {
   return *context;
 }
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

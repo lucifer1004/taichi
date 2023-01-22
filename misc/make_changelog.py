@@ -22,7 +22,7 @@ def load_pr_tags():
 def find_latest_tag_commit(tags):
     for tag in reversed(tags):
         s = re.match(r'v\s*([\d.]+)', tag.name)
-        print(f'Latest version tag is: {tag.name}')
+        print(f'Latest version tag is: {tag.name}', file=sys.stderr)
         if s is not None:
             return tag.commit
 
@@ -35,8 +35,8 @@ def main(ver=None, repo_dir='.'):
     # everything after this commit should be listed in the changelog.
 
     base_commit = find_latest_tag_commit(g.tags)
-    commits_in_base_tag = list(g.iter_commits(base_commit, max_count=200))
-    commits = list(g.iter_commits(ver, max_count=200))
+    commits_in_base_tag = list(g.iter_commits(base_commit, max_count=500))
+    commits = list(g.iter_commits(ver, max_count=500))
     begin, end = -1, 0
 
     def format(c):
@@ -74,7 +74,6 @@ def main(ver=None, repo_dir='.'):
                 print(
                     f'** Warning: tag {tag.lower()} undefined in the "details" dict. Please include the tag into "details", unless the tag is a typo.'
                 )
-
         all_changes.append(format(c))
 
     res = 'Highlights:\n'

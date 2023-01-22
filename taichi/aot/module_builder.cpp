@@ -1,13 +1,9 @@
 #include "taichi/aot/module_builder.h"
 #include "taichi/program/kernel.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 void AotModuleBuilder::add(const std::string &identifier, Kernel *kernel) {
-  if (!kernel->lowered() && Kernel::supports_lowering(kernel->arch)) {
-    kernel->lower(/*to_executable=*/!arch_uses_llvm(kernel->arch));
-  }
   add_per_backend(identifier, kernel);
 }
 
@@ -25,9 +21,6 @@ void AotModuleBuilder::add_field(const std::string &identifier,
 void AotModuleBuilder::add_kernel_template(const std::string &identifier,
                                            const std::string &key,
                                            Kernel *kernel) {
-  if (!kernel->lowered() && Kernel::supports_lowering(kernel->arch)) {
-    kernel->lower();
-  }
   add_per_backend_tmpl(identifier, key, kernel);
 }
 
@@ -63,10 +56,13 @@ void AotModuleBuilder::add_graph(const std::string &name,
     TI_ERROR("Graph {} already exists", name);
   }
   // Handle adding kernels separately.
+  std::unordered_map<std::string, lang::Kernel *> kernels;
   for (const auto &dispatch : graph.dispatches) {
-    add_compiled_kernel(dispatch.compiled_kernel);
+    kernels[dispatch.kernel_name] = dispatch.ti_kernel;
+  }
+  for (auto &e : kernels) {
+    add(e.first, e.second);
   }
   graphs_[name] = graph;
 }
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

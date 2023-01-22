@@ -11,7 +11,9 @@
 #include "taichi/program/function.h"
 #include "taichi/ir/mesh.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
+
+class ASTBuilder;
 
 struct ForLoopConfig {
   bool is_bit_vectorized{false};
@@ -53,7 +55,7 @@ class FrontendExprStmt : public Stmt {
  public:
   Expr val;
 
-  FrontendExprStmt(const Expr &val) : val(val) {
+  explicit FrontendExprStmt(const Expr &val) : val(val) {
   }
 
   TI_DEFINE_ACCEPT
@@ -132,7 +134,7 @@ class FrontendIfStmt : public Stmt {
   Expr condition;
   std::unique_ptr<Block> true_statements, false_statements;
 
-  FrontendIfStmt(const Expr &condition) : condition(condition) {
+  explicit FrontendIfStmt(const Expr &condition) : condition(condition) {
   }
 
   bool is_container_statement() const override {
@@ -147,7 +149,7 @@ class FrontendPrintStmt : public Stmt {
   using EntryType = std::variant<Expr, std::string>;
   std::vector<EntryType> contents;
 
-  FrontendPrintStmt(const std::vector<EntryType> &contents_) {
+  explicit FrontendPrintStmt(const std::vector<EntryType> &contents_) {
     for (const auto &c : contents_) {
       if (std::holds_alternative<Expr>(c))
         contents.push_back(std::get<Expr>(c));
@@ -215,7 +217,7 @@ class FrontendFuncDefStmt : public Stmt {
   std::string funcid;
   std::unique_ptr<Block> body;
 
-  FrontendFuncDefStmt(const std::string &funcid) : funcid(funcid) {
+  explicit FrontendFuncDefStmt(const std::string &funcid) : funcid(funcid) {
   }
 
   bool is_container_statement() const override {
@@ -253,7 +255,7 @@ class FrontendWhileStmt : public Stmt {
   Expr cond;
   std::unique_ptr<Block> body;
 
-  FrontendWhileStmt(const Expr &cond) : cond(cond) {
+  explicit FrontendWhileStmt(const Expr &cond) : cond(cond) {
   }
 
   bool is_container_statement() const override {
@@ -267,8 +269,7 @@ class FrontendReturnStmt : public Stmt {
  public:
   ExprGroup values;
 
-  FrontendReturnStmt(const ExprGroup &group) : values(group) {
-  }
+  explicit FrontendReturnStmt(const ExprGroup &group);
 
   bool is_container_statement() const override {
     return false;
@@ -289,7 +290,7 @@ class ArgLoadExpression : public Expression {
       : arg_id(arg_id), dt(dt), is_ptr(is_ptr) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -313,7 +314,7 @@ class TexturePtrExpression : public Expression {
   DataType channel_format{PrimitiveType::f32};
   int lod{0};
 
-  TexturePtrExpression(int arg_id, int num_dims = 2)
+  explicit TexturePtrExpression(int arg_id, int num_dims)
       : arg_id(arg_id), num_dims(num_dims) {
   }
 
@@ -330,7 +331,7 @@ class TexturePtrExpression : public Expression {
         lod(lod) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -341,10 +342,10 @@ class RandExpression : public Expression {
  public:
   DataType dt;
 
-  RandExpression(DataType dt) : dt(dt) {
+  explicit RandExpression(DataType dt) : dt(dt) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -366,7 +367,7 @@ class UnaryOpExpression : public Expression {
       : type(type), operand(operand), cast_type(cast_type) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   bool is_cast() const;
 
@@ -384,7 +385,7 @@ class BinaryOpExpression : public Expression {
       : type(type), lhs(lhs), rhs(rhs) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -406,7 +407,7 @@ class TernaryOpExpression : public Expression {
     this->op3.set(op3);
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -428,7 +429,7 @@ class InternalFuncCallExpression : public Expression {
     }
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -443,52 +444,66 @@ class ExternalTensorExpression : public Expression {
   int arg_id;
   int element_dim;  // 0: scalar; 1: vector (SOA); 2: matrix (SOA); -1: vector
                     // (AOS); -2: matrix (AOS)
+  bool is_grad;
 
   ExternalTensorExpression(const DataType &dt,
                            int dim,
                            int arg_id,
-                           int element_dim) {
-    init(dt, dim, arg_id, element_dim);
+                           int element_dim,
+                           bool is_grad = false) {
+    init(dt, dim, arg_id, element_dim, is_grad);
   }
 
   ExternalTensorExpression(const DataType &dt,
                            int dim,
                            int arg_id,
                            int element_dim,
-                           const std::vector<int> &element_shape) {
+                           const std::vector<int> &element_shape,
+                           bool is_grad = false) {
     if (element_shape.size() == 0) {
-      init(dt, dim, arg_id, element_dim);
+      init(dt, dim, arg_id, element_dim, is_grad);
     } else {
       TI_ASSERT(dt->is<PrimitiveType>());
 
       auto tensor_type =
           taichi::lang::TypeFactory::get_instance().create_tensor_type(
               element_shape, dt);
-      init(tensor_type, dim, arg_id, element_dim);
+      init(tensor_type, dim, arg_id, element_dim, is_grad);
     }
+  }
+
+  explicit ExternalTensorExpression(Expr *expr, bool is_grad = true) {
+    auto ptr = expr->cast<ExternalTensorExpression>();
+    init(ptr->dt, ptr->dim, ptr->arg_id, ptr->element_dim, is_grad);
   }
 
   void flatten(FlattenContext *ctx) override;
 
   TI_DEFINE_ACCEPT_FOR_EXPRESSION
 
-  CompileConfig *get_compile_config() {
+  const CompileConfig *get_compile_config() {
     TI_ASSERT(config_ != nullptr);
     return config_;
   }
 
-  void type_check(CompileConfig *config) override {
+  void type_check(const CompileConfig *config) override {
+    ret_type = dt;
     config_ = config;
   }
 
  private:
-  CompileConfig *config_ = nullptr;
+  const CompileConfig *config_ = nullptr;
 
-  void init(const DataType &dt, int dim, int arg_id, int element_dim) {
+  void init(const DataType &dt,
+            int dim,
+            int arg_id,
+            int element_dim,
+            bool is_grad) {
     this->dt = dt;
     this->dim = dim;
     this->arg_id = arg_id;
     this->element_dim = element_dim;
+    this->is_grad = is_grad;
   }
 };
 
@@ -509,21 +524,50 @@ class FieldExpression : public Expression {
   FieldExpression(DataType dt, const Identifier &ident) : ident(ident), dt(dt) {
   }
 
-  void type_check(CompileConfig *config) override {
+  void type_check(const CompileConfig *config) override {
   }
 
   void set_snode(SNode *snode) {
     this->snode = snode;
   }
 
-  void flatten(FlattenContext *ctx) override;
+  TI_DEFINE_ACCEPT_FOR_EXPRESSION
+};
+
+class MatrixFieldExpression : public Expression {
+ public:
+  std::vector<Expr> fields;
+  std::vector<int> element_shape;
+  bool dynamic_indexable{false};
+  int dynamic_index_stride{0};
+
+  MatrixFieldExpression(const std::vector<Expr> &fields,
+                        const std::vector<int> &element_shape)
+      : fields(fields), element_shape(element_shape) {
+    for (auto &field : fields) {
+      TI_ASSERT(field.is<FieldExpression>());
+    }
+    TI_ASSERT(!fields.empty());
+    auto compute_type =
+        fields[0].cast<FieldExpression>()->dt->get_compute_type();
+    for (auto &field : fields) {
+      if (field.cast<FieldExpression>()->dt->get_compute_type() !=
+          compute_type) {
+        throw TaichiRuntimeError(
+            "Member fields of a matrix field must have the same compute type");
+      }
+    }
+  }
+
+  void type_check(const CompileConfig *config) override {
+  }
 
   TI_DEFINE_ACCEPT_FOR_EXPRESSION
 };
 
 /**
  * Creating a local matrix;
- * lowered from ti.Matrix with real_matrix=True
+ * lowered from ti.Matrix
  */
 class MatrixExpression : public Expression {
  public:
@@ -537,7 +581,7 @@ class MatrixExpression : public Expression {
     this->dt = DataType(TypeFactory::create_tensor_type(shape, element_type));
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -546,19 +590,25 @@ class MatrixExpression : public Expression {
 
 class IndexExpression : public Expression {
  public:
-  // `var` is one of FieldExpression, ExternalTensorExpression,
-  // IdExpression
+  // `var` is one of FieldExpression, MatrixFieldExpression,
+  // ExternalTensorExpression, IdExpression
   Expr var;
-  ExprGroup indices;
+  // In the cases of matrix slice and vector swizzle, there can be multiple
+  // indices, and the corresponding ret_shape should also be recorded. In normal
+  // index expressions ret_shape will be left empty.
+  std::vector<ExprGroup> indices_group;
+  std::vector<int> ret_shape;
 
   IndexExpression(const Expr &var,
                   const ExprGroup &indices,
-                  std::string tb = "")
-      : var(var), indices(indices) {
-    this->tb = tb;
-  }
+                  std::string tb = "");
 
-  void type_check(CompileConfig *config) override;
+  IndexExpression(const Expr &var,
+                  const std::vector<ExprGroup> &indices_group,
+                  const std::vector<int> &ret_shape,
+                  std::string tb = "");
+
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -575,36 +625,9 @@ class IndexExpression : public Expression {
 
  private:
   bool is_field() const;
+  bool is_matrix_field() const;
   bool is_ndarray() const;
   bool is_tensor() const;
-};
-
-class StrideExpression : public Expression {
- public:
-  // `var` must be an IndexExpression on a FieldExpression
-  // therefore the access is always global
-  Expr var;
-  ExprGroup indices;
-  std::vector<int> shape;
-  int stride{0};
-
-  StrideExpression(const Expr &var,
-                   const ExprGroup &indices,
-                   const std::vector<int> &shape,
-                   int stride)
-      : var(var), indices(indices), shape(shape), stride(stride) {
-    // TODO: shape & indices check
-  }
-
-  void type_check(CompileConfig *config) override;
-
-  void flatten(FlattenContext *ctx) override;
-
-  bool is_lvalue() const override {
-    return true;
-  }
-
-  TI_DEFINE_ACCEPT_FOR_EXPRESSION
 };
 
 class RangeAssumptionExpression : public Expression {
@@ -619,7 +642,7 @@ class RangeAssumptionExpression : public Expression {
       : input(input), base(base), low(low), high(high) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -635,7 +658,7 @@ class LoopUniqueExpression : public Expression {
       : input(input), covers(covers) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -646,10 +669,10 @@ class IdExpression : public Expression {
  public:
   Identifier id;
 
-  IdExpression(const Identifier &id) : id(id) {
+  explicit IdExpression(const Identifier &id) : id(id) {
   }
 
-  void type_check(CompileConfig *config) override {
+  void type_check(const CompileConfig *config) override {
   }
 
   void flatten(FlattenContext *ctx) override;
@@ -675,7 +698,7 @@ class AtomicOpExpression : public Expression {
       : op_type(op_type), dest(dest), val(val) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -687,20 +710,18 @@ class SNodeOpExpression : public Expression {
   SNode *snode;
   SNodeOpType op_type;
   ExprGroup indices;
-  Expr value;
+  std::vector<Expr> values;  // Only for op_type==append
 
-  SNodeOpExpression(SNode *snode, SNodeOpType op_type, const ExprGroup &indices)
-      : snode(snode), op_type(op_type), indices(indices) {
-  }
+  SNodeOpExpression(SNode *snode,
+                    SNodeOpType op_type,
+                    const ExprGroup &indices);
 
   SNodeOpExpression(SNode *snode,
                     SNodeOpType op_type,
                     const ExprGroup &indices,
-                    const Expr &value)
-      : snode(snode), op_type(op_type), indices(indices), value(value) {
-  }
+                    const std::vector<Expr> &values);
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -715,11 +736,9 @@ class TextureOpExpression : public Expression {
 
   explicit TextureOpExpression(TextureOpType op,
                                Expr texture_ptr,
-                               const ExprGroup &args)
-      : op(op), texture_ptr(texture_ptr), args(args) {
-  }
+                               const ExprGroup &args);
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -731,7 +750,7 @@ class ConstExpression : public Expression {
   TypedConstant val;
 
   template <typename T>
-  ConstExpression(const T &x) : val(x) {
+  explicit ConstExpression(const T &x) : val(x) {
     ret_type = val.dt;
   }
   template <typename T>
@@ -739,7 +758,7 @@ class ConstExpression : public Expression {
     ret_type = dt;
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -755,22 +774,43 @@ class ExternalTensorShapeAlongAxisExpression : public Expression {
       : ptr(ptr), axis(axis) {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
   TI_DEFINE_ACCEPT_FOR_EXPRESSION
 };
 
-class FuncCallExpression : public Expression {
+class FrontendFuncCallStmt : public Stmt {
  public:
+  std::optional<Identifier> ident;
   Function *func;
   ExprGroup args;
 
-  void type_check(CompileConfig *config) override;
+  explicit FrontendFuncCallStmt(
+      Function *func,
+      const ExprGroup &args,
+      const std::optional<Identifier> &id = std::nullopt)
+      : ident(id), func(func), args(args) {
+    TI_ASSERT(id.has_value() == !func->rets.empty());
+  }
 
-  FuncCallExpression(Function *func, const ExprGroup &args)
-      : func(func), args(args) {
+  bool is_container_statement() const override {
+    return false;
+  }
+
+  TI_DEFINE_ACCEPT
+};
+
+class GetElementExpression : public Expression {
+ public:
+  Expr src;
+  std::vector<int> index;
+
+  void type_check(const CompileConfig *config) override;
+
+  GetElementExpression(const Expr &src, std::vector<int> index)
+      : src(src), index(index) {
   }
 
   void flatten(FlattenContext *ctx) override;
@@ -785,7 +825,7 @@ class MeshPatchIndexExpression : public Expression {
   MeshPatchIndexExpression() {
   }
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   void flatten(FlattenContext *ctx) override;
 
@@ -799,7 +839,7 @@ class MeshRelationAccessExpression : public Expression {
   mesh::MeshElementType to_type;
   Expr neighbor_idx;
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   MeshRelationAccessExpression(mesh::Mesh *mesh,
                                const Expr mesh_idx,
@@ -829,14 +869,12 @@ class MeshIndexConversionExpression : public Expression {
   Expr idx;
   mesh::ConvType conv_type;
 
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
   MeshIndexConversionExpression(mesh::Mesh *mesh,
                                 mesh::MeshElementType idx_type,
                                 const Expr idx,
-                                mesh::ConvType conv_type)
-      : mesh(mesh), idx_type(idx_type), idx(idx), conv_type(conv_type) {
-  }
+                                mesh::ConvType conv_type);
 
   void flatten(FlattenContext *ctx) override;
 
@@ -846,9 +884,9 @@ class MeshIndexConversionExpression : public Expression {
 class ReferenceExpression : public Expression {
  public:
   Expr var;
-  void type_check(CompileConfig *config) override;
+  void type_check(const CompileConfig *config) override;
 
-  ReferenceExpression(const Expr &expr) : var(expr) {
+  explicit ReferenceExpression(const Expr &expr) : var(expr) {
   }
 
   void flatten(FlattenContext *ctx) override;
@@ -924,13 +962,19 @@ class ASTBuilder {
                                  const ExprGroup &args,
                                  const ExprGroup &outputs);
   Expr expr_alloca();
-  Expr expr_alloca_local_tensor(const std::vector<int> &shape,
-                                const DataType &element_type,
-                                const ExprGroup &elements,
-                                std::string tb);
   Expr expr_alloca_shared_array(const std::vector<int> &shape,
                                 const DataType &element_type);
+  Expr expr_subscript(const Expr &expr,
+                      const ExprGroup &indices,
+                      std::string tb = "");
+
+  Expr mesh_index_conversion(mesh::MeshPtr mesh_ptr,
+                             mesh::MeshElementType idx_type,
+                             const Expr &idx,
+                             mesh::ConvType &conv_type);
+
   void expr_assign(const Expr &lhs, const Expr &rhs, std::string tb);
+  std::optional<Expr> insert_func_call(Function *func, const ExprGroup &args);
   void create_assert_stmt(const Expr &cond,
                           const std::string &msg,
                           const std::vector<Expr> &args);
@@ -949,6 +993,25 @@ class ASTBuilder {
   void insert_expr_stmt(const Expr &val);
   void insert_snode_activate(SNode *snode, const ExprGroup &expr_group);
   void insert_snode_deactivate(SNode *snode, const ExprGroup &expr_group);
+  Expr make_texture_op_expr(const TextureOpType &op,
+                            const Expr &texture_ptr,
+                            const ExprGroup &args);
+  /*
+   * This function allocates the space for a new item (a struct or a scalar)
+   * in the Dynamic SNode, and assigns values to the elements inside it.
+   *
+   * When appending a struct, the size of vals must be equal to
+   * the number of elements in the struct. When appending a scalar,
+   * the size of vals must be one.
+   */
+  Expr snode_append(SNode *snode,
+                    const ExprGroup &indices,
+                    const std::vector<Expr> &vals);
+  Expr snode_is_active(SNode *snode, const ExprGroup &indices);
+  Expr snode_length(SNode *snode, const ExprGroup &indices);
+  Expr snode_get_addr(SNode *snode, const ExprGroup &indices);
+
+  std::vector<Expr> expand_exprs(const std::vector<Expr> &exprs);
 
   void create_scope(std::unique_ptr<Block> &list, LoopType tp = NotLoop);
   void pop_scope();
@@ -993,7 +1056,7 @@ class FrontendContext {
   std::unique_ptr<Block> root_node_;
 
  public:
-  FrontendContext(Arch arch) {
+  explicit FrontendContext(Arch arch) {
     root_node_ = std::make_unique<Block>();
     current_builder_ = std::make_unique<ASTBuilder>(root_node_.get(), arch);
   }
@@ -1007,8 +1070,8 @@ class FrontendContext {
   }
 };
 
-void flatten_lvalue(Expr expr, Expression::FlattenContext *ctx);
+Stmt *flatten_lvalue(Expr expr, Expression::FlattenContext *ctx);
 
-void flatten_rvalue(Expr expr, Expression::FlattenContext *ctx);
+Stmt *flatten_rvalue(Expr expr, Expression::FlattenContext *ctx);
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

@@ -7,12 +7,11 @@ from tests import test_utils
 
 
 def _get_matrix_swizzle_apis():
-    swizzle_gen = ti.lang.swizzle_generator.SwizzleGenerator()
+    swizzle_gen = ti.lang.matrix._generate_swizzle_patterns
     KEMAP_SET = ['xyzw', 'rgba', 'stpq']
     res = []
     for key_group in KEMAP_SET:
-        sw_patterns = swizzle_gen.generate(key_group, required_length=4)
-        sw_patterns = map(lambda p: ''.join(p), sw_patterns)
+        sw_patterns = swizzle_gen(key_group, required_length=4)
         res += sw_patterns
     return sorted(res)
 
@@ -21,20 +20,16 @@ def _get_expected_matrix_apis():
     base = [
         'all',
         'any',
-        'any_array_access',
         'cast',
         'cols',
         'cross',
         'determinant',
         'diag',
         'dot',
-        'dynamic_index_stride',
-        'entries',
         'field',
         'fill',
         'identity',
         'inverse',
-        'local_tensor_proxy',
         'max',
         'min',
         'ndarray',
@@ -44,7 +39,6 @@ def _get_expected_matrix_apis():
         'normalized',
         'one',
         'outer_product',
-        'rotation2d',
         'rows',
         'sum',
         'to_list',
@@ -53,6 +47,7 @@ def _get_expected_matrix_apis():
         'transpose',
         'unit',
         'zero',
+        'get_shape',
     ]
     res = base + _get_matrix_swizzle_apis()
     return sorted(res)
@@ -60,39 +55,41 @@ def _get_expected_matrix_apis():
 
 user_api = {}
 user_api[ti] = [
-    'BitpackedFields', 'CRITICAL', 'DEBUG', 'ERROR', 'Field', 'FieldsBuilder',
-    'GUI', 'INFO', 'Layout', 'Matrix', 'MatrixField', 'MatrixNdarray', 'Mesh',
-    'Ndarray', 'SNode', 'ScalarField', 'ScalarNdarray', 'Struct',
-    'StructField', 'TRACE', 'TaichiAssertionError', 'TaichiCompilationError',
-    'TaichiNameError', 'TaichiRuntimeError', 'TaichiRuntimeTypeError',
-    'TaichiSyntaxError', 'TaichiTypeError', 'TetMesh', 'Texture', 'TriMesh',
-    'Vector', 'VectorNdarray', 'WARN', 'abs', 'acos', 'activate', 'ad', 'aot',
-    'append', 'arm64', 'asin', 'assume_in_range', 'atan2', 'atomic_add',
-    'atomic_and', 'atomic_max', 'atomic_min', 'atomic_or', 'atomic_sub',
-    'atomic_xor', 'axes', 'bit_cast', 'bit_shr', 'block_local',
-    'cache_read_only', 'cast', 'cc', 'ceil', 'cos', 'cpu', 'cuda',
-    'data_oriented', 'dataclass', 'deactivate', 'deactivate_all_snodes',
-    'dx11', 'eig', 'exp', 'experimental', 'extension', 'f16', 'f32', 'f64',
-    'field', 'float16', 'float32', 'float64', 'floor', 'func', 'get_addr',
-    'get_compute_stream_device_time_elapsed_us', 'global_thread_idx', 'gpu',
-    'graph', 'grouped', 'hex_to_rgb', 'i', 'i16', 'i32', 'i64', 'i8', 'ij',
-    'ijk', 'ijkl', 'ijl', 'ik', 'ikl', 'il', 'init', 'int16', 'int32', 'int64',
-    'int8', 'is_active', 'is_logging_effective', 'j', 'jk', 'jkl', 'jl', 'k',
-    'kernel', 'kl', 'l', 'lang', 'length', 'linalg', 'log', 'loop_config',
-    'math', 'max', 'mesh_local', 'mesh_patch_idx', 'metal', 'min', 'ndarray',
-    'ndrange', 'no_activate', 'one', 'opengl', 'polar_decompose', 'pow',
-    'profiler', 'randn', 'random', 'raw_div', 'raw_mod', 'ref',
-    'rescale_index', 'reset', 'rgb_to_hex', 'root', 'round', 'rsqrt', 'select',
-    'set_logging_level', 'simt', 'sin', 'solve', 'sparse_matrix_builder',
-    'sqrt', 'static', 'static_assert', 'static_print', 'stop_grad', 'svd',
-    'swizzle_generator', 'sym_eig', 'sync', 'tan', 'tanh', 'template', 'tools',
-    'types', 'u16', 'u32', 'u64', 'u8', 'ui', 'uint16', 'uint32', 'uint64',
-    'uint8', 'vulkan', 'wasm', 'x64', 'x86_64', 'zero'
+    'BitpackedFields', 'CRITICAL', 'DEBUG', "DeviceCapability", 'ERROR',
+    'Field', 'FieldsBuilder', 'Format', 'GUI', 'INFO', 'Layout', 'Matrix',
+    'MatrixField', 'MatrixNdarray', 'Mesh', 'MeshInstance', 'Ndarray', 'SNode',
+    'ScalarField', 'ScalarNdarray', 'Struct', 'StructField', 'TRACE',
+    'TaichiAssertionError', 'TaichiCompilationError', 'TaichiNameError',
+    'TaichiRuntimeError', 'TaichiRuntimeTypeError', 'TaichiSyntaxError',
+    'TaichiTypeError', 'Texture', 'Vector', 'VectorNdarray', 'WARN', 'abs',
+    'acos', 'activate', 'ad', 'algorithms', 'aot', 'append', 'arm64', 'asin',
+    'assume_in_range', 'atan2', 'atomic_add', 'atomic_and', 'atomic_max',
+    'atomic_min', 'atomic_or', 'atomic_sub', 'atomic_xor', 'axes', 'bit_cast',
+    'bit_shr', 'block_local', 'cache_read_only', 'cast', 'cc', 'ceil', 'cos',
+    'cpu', 'cuda', 'data_oriented', 'dataclass', 'deactivate',
+    'deactivate_all_snodes', 'dx11', 'dx12', 'eig', 'exp', 'experimental',
+    'extension', 'f16', 'f32', 'f64', 'field', 'float16', 'float32', 'float64',
+    'floor', 'func', 'get_addr', 'get_compute_stream_device_time_elapsed_us',
+    'gles', 'global_thread_idx', 'gpu', 'graph', 'grouped', 'hex_to_rgb', 'i',
+    'i16', 'i32', 'i64', 'i8', 'ij', 'ijk', 'ijkl', 'ijl', 'ik', 'ikl', 'il',
+    'init', 'int16', 'int32', 'int64', 'int8', 'is_active',
+    'is_logging_effective', 'j', 'jk', 'jkl', 'jl', 'k', 'kernel', 'kl', 'l',
+    'lang', 'length', 'linalg', 'log', 'loop_config', 'math', 'max',
+    'mesh_local', 'mesh_patch_idx', 'metal', 'min', 'ndarray', 'ndrange',
+    'no_activate', 'one', 'opengl', 'polar_decompose', 'pow', 'profiler',
+    'randn', 'random', 'raw_div', 'raw_mod', 'ref', 'rescale_index', 'reset',
+    'rgb_to_hex', 'root', 'round', 'rsqrt', 'select', 'set_logging_level',
+    'simt', 'sin', 'solve', 'sparse_matrix_builder', 'sqrt', 'static',
+    'static_assert', 'static_print', 'stop_grad', 'svd', 'sym_eig', 'sync',
+    'tan', 'tanh', 'template', 'tools', 'types', 'u16', 'u32', 'u64', 'u8',
+    'ui', 'uint16', 'uint32', 'uint64', 'uint8', 'vulkan', 'wasm', 'x64',
+    'x86_64', 'zero'
 ]
 user_api[ti.ad] = [
     'FwdMode', 'Tape', 'clear_all_gradients', 'grad_for', 'grad_replaced',
     'no_grad'
 ]
+user_api[ti.algorithms] = ['PrefixSumExecutor', 'parallel_sort']
 user_api[ti.Field] = [
     'copy_from', 'dtype', 'fill', 'from_numpy', 'from_paddle', 'from_torch',
     'parent', 'shape', 'snode', 'to_numpy', 'to_paddle', 'to_torch'

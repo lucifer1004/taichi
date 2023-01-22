@@ -18,7 +18,7 @@
 #include "taichi/transforms/simplify.h"
 #include "taichi/common/trait.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 class ScratchPads;
 
@@ -29,12 +29,16 @@ namespace irpass {
 
 void re_id(IRNode *root);
 void flag_access(IRNode *root);
+void eliminate_immutable_local_vars(IRNode *root);
+void scalarize(IRNode *root);
+void lower_matrix_ptr(IRNode *root);
 bool die(IRNode *root);
 bool simplify(IRNode *root, const CompileConfig &config);
 bool cfg_optimization(
     IRNode *root,
     bool after_lower_access,
     bool autodiff_enabled,
+    bool real_matrix_enabled,
     const std::optional<ControlFlowGraph::LiveVarAnalysisConfig>
         &lva_config_opt = std::nullopt);
 bool alg_simp(IRNode *root, const CompileConfig &config);
@@ -44,6 +48,8 @@ bool whole_kernel_cse(IRNode *root);
 bool extract_constant(IRNode *root, const CompileConfig &config);
 bool unreachable_code_elimination(IRNode *root);
 bool loop_invariant_code_motion(IRNode *root, const CompileConfig &config);
+bool cache_loop_invariant_global_vars(IRNode *root,
+                                      const CompileConfig &config);
 void full_simplify(IRNode *root,
                    const CompileConfig &config,
                    const FullSimplifyPass::Args &args);
@@ -125,7 +131,7 @@ bool replace_and_insert_statements(
 bool replace_statements(IRNode *root,
                         std::function<bool(Stmt *)> filter,
                         std::function<Stmt *(Stmt *)> finder);
-void demote_dense_struct_fors(IRNode *root, bool packed);
+void demote_dense_struct_fors(IRNode *root);
 void demote_no_access_mesh_fors(IRNode *root);
 bool demote_atomics(IRNode *root, const CompileConfig &config);
 void reverse_segments(IRNode *root);  // for autograd
@@ -189,6 +195,12 @@ void compile_function(IRNode *ir,
                       AutodiffMode autodiff_mode,
                       bool verbose,
                       bool start_from_ast);
+
+void ast_to_ir(const CompileConfig &config,
+               Kernel &kernel,
+               bool to_executable = true);
+
+void compile_taichi_functions(IRNode *ir, const CompileConfig &compile_config);
 }  // namespace irpass
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

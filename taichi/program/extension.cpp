@@ -3,28 +3,27 @@
 #include <unordered_map>
 #include <unordered_set>
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 bool is_extension_supported(Arch arch, Extension ext) {
   static std::unordered_map<Arch, std::unordered_set<Extension>> arch2ext = {
       {Arch::x64,
        {Extension::sparse, Extension::quant, Extension::quant_basic,
         Extension::data64, Extension::adstack, Extension::assertion,
-        Extension::extfunc, Extension::packed, Extension::dynamic_index,
-        Extension::mesh}},
+        Extension::extfunc, Extension::mesh}},
       {Arch::arm64,
        {Extension::sparse, Extension::quant, Extension::quant_basic,
         Extension::data64, Extension::adstack, Extension::assertion,
-        Extension::packed, Extension::dynamic_index}},
+        Extension::mesh}},
       {Arch::cuda,
        {Extension::sparse, Extension::quant, Extension::quant_basic,
         Extension::data64, Extension::adstack, Extension::bls,
-        Extension::assertion, Extension::packed, Extension::dynamic_index,
-        Extension::mesh}},
-      // TODO: supporting quant in metal(tests randomly crashed)
-      {Arch::metal,
-       {Extension::adstack, Extension::assertion, Extension::sparse}},
+        Extension::assertion, Extension::mesh}},
+      {Arch::metal, {}},
       {Arch::opengl, {Extension::extfunc}},
+      {Arch::gles, {}},
+      {Arch::vulkan, {}},
+      {Arch::dx11, {}},
       {Arch::cc, {Extension::data64, Extension::extfunc, Extension::adstack}},
   };
   // if (with_opengl_extension_data64())
@@ -33,4 +32,4 @@ bool is_extension_supported(Arch arch, Extension ext) {
   return exts.find(ext) != exts.end();
 }
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

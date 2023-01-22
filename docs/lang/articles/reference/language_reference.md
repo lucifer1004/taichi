@@ -21,7 +21,7 @@ article. You can clearly determine a certain behavior is *correct*, *buggy*, or
 ## Introduction
 
 Taichi is a domain-specific language embedded in Python.
-[Kernels and functions](../kernels/syntax.md) clearly defines the boundary between
+[Kernels and functions](../kernels/kernel_function.md) clearly defines the boundary between
 the Taichi language and the Python language - code in the Taichi scope is
 treated as the former, while code in the Python scope is treated as the latter.
 It should be emphasized that this article is about *the Taichi language*.
@@ -73,8 +73,7 @@ the remaining expressions will be evaluated to Taichi values at runtime.
 A Taichi value has a Taichi type, which is one of the following:
 - A primitive type, as described in [Type system](../type_system/type.md)
 - A compound type, as described in [Type system](../type_system/type.md)
-- An ndarray type, as introduced in [Run a Taichi Program using Ndarray on
-Android](../deployment/ndarray_android.md)
+- An ndarray type, as introduced in [Tutorial: Run Taichi programs in C++ application](../deployment/ndarray_android.md)
 - A sparse matrix builder type, as introduced in [Sparse
 Matrix](../math/sparse_matrix.md)
 
@@ -252,12 +251,6 @@ Otherwise, `primary` has a Taichi type. All Taichi types excluding primitive
 types support subscriptions. You can refer to documentation of these types
 for subscription usage.
 
-:::note
-When `primary` has a Taichi matrix type, all expressions in `expression_list`
-are required to be evaluated to Python values. This restriction can be got rid
-of by setting `ti.init(dynamic_index=True)`.
-:::
-
 #### Slicings
 
 ```
@@ -284,7 +277,7 @@ positional_item      ::= assignment_expression | "*" expression
 ```
 
 The `primary` must be evaluated to one of:
-- A [Taichi function](../kernels/syntax.md#taichi-function).
+- A [Taichi function](../kernels/kernel_function.md#taichi-function).
 - A [Taichi builtin function](./operator.md#other-arithmetic-functions).
 - A Taichi primitive type. In this case, the `positional_arguments` must only
   contain one item. If the item is evaluated to a Python value, then the

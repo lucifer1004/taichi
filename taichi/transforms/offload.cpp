@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <utility>
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 namespace irpass {
 namespace {
@@ -38,7 +38,7 @@ class SquashPtrOffset : public IRVisitor {
   void visit(Stmt *stmt) override {
     top_level_ptr_ = stmt;
   }
-  void visit(PtrOffsetStmt *stmt) override {
+  void visit(MatrixPtrStmt *stmt) override {
     stmt->origin->accept(this);
   }
   static Stmt *run(Stmt *root) {
@@ -112,7 +112,8 @@ class Offloader {
           offloaded->const_end = true;
           offloaded->end_value = val->val.val_int32();
         } else {
-          if ((arch == Arch::opengl || arch == Arch::vulkan) &&
+          if ((arch == Arch::opengl || arch == Arch::vulkan ||
+               arch == Arch::gles) &&
               demotable_axis_load(s->end)) {
             // TODO: We need to update codegen for each backend gradually so
             // let's limit it to opengl backend for now.
@@ -385,7 +386,8 @@ class IdentifyValuesUsedInOtherOffloads : public BasicStmtVisitor {
     if (top_level_ptr->is<GlobalPtrStmt>() || stmt->is<ExternalPtrStmt>() ||
         (stmt->is<ArgLoadStmt>() && stmt->as<ArgLoadStmt>()->is_ptr))
       return;
-    if ((config_.arch == Arch::opengl || config_.arch == Arch::vulkan) &&
+    if ((config_.arch == Arch::opengl || config_.arch == Arch::vulkan ||
+         config_.arch == Arch::gles) &&
         demotable_axis_load(stmt))
       return;
     // Not yet allocated
@@ -535,11 +537,10 @@ class FixCrossOffloadReferences : public BasicStmtVisitor {
       auto const_zero_stmt = replacement.push_back<ConstStmt>(zero);
       stmt_to_offloaded_[const_zero_stmt] = offloaded;
       for (int i = 0; i < tensor_type->get_num_elements(); ++i) {
-        TypedConstant offset(i *
-                             data_type_size(tensor_type->get_element_type()));
-        auto const_offset_stmt = replacement.push_back<ConstStmt>(offset);
+        auto const_offset_stmt =
+            replacement.push_back<ConstStmt>(TypedConstant(i));
         auto ptr_offset_stmt =
-            replacement.push_back<PtrOffsetStmt>(ptr, const_offset_stmt);
+            replacement.push_back<MatrixPtrStmt>(ptr, const_offset_stmt);
         auto global_store_stmt = replacement.push_back<GlobalStoreStmt>(
             ptr_offset_stmt, const_zero_stmt);
         stmt_to_offloaded_[const_offset_stmt] = offloaded;
@@ -611,7 +612,7 @@ class FixCrossOffloadReferences : public BasicStmtVisitor {
     if (local_to_global_offset_.find(op) == local_to_global_offset_.end()) {
       // For stmts that are not promoted to global tmp, clone them into current
       // offloaded task. E.g.
-      // ConstStmt/PtrOffsetStmt/GlobalTemporaryStmt/ExternalTensorShapeAlongAxisStmt
+      // ConstStmt/MatrixPtrStmt/GlobalTemporaryStmt/ExternalTensorShapeAlongAxisStmt
       // etc.
       auto copy = op->clone();
       auto pcopy = copy.get();
@@ -695,6 +696,13 @@ void insert_gc(IRNode *root, const CompileConfig &config) {
         b->insert(std::move(gc_task), i + 1);
       }
     }
+  }
+  if (!irpass::analysis::gather_statements(root, [](Stmt *stmt) {
+         return stmt->is<FuncCallStmt>();
+       }).empty()) {
+    auto gc_task = Stmt::make_typed<OffloadedStmt>(
+        OffloadedStmt::TaskType::gc_rc, config.arch);
+    b->insert(std::move(gc_task));
   }
 }
 
@@ -789,4 +797,4 @@ void offload(IRNode *root, const CompileConfig &config) {
 
 }  // namespace irpass
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

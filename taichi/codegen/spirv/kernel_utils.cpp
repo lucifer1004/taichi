@@ -7,8 +7,7 @@
 #include "taichi/program/context.h"
 #undef TI_RUNTIME_HOST
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace spirv {
 
 // static
@@ -48,16 +47,17 @@ std::string TaskAttributes::BufferBind::debug_string() const {
                      TaskAttributes::buffers_name(buffer), binding);
 }
 
-KernelContextAttributes::KernelContextAttributes(const Kernel &kernel,
-                                                 Device *device)
+KernelContextAttributes::KernelContextAttributes(
+    const Kernel &kernel,
+    const DeviceCapabilityConfig *caps)
     : args_bytes_(0),
       rets_bytes_(0),
       extra_args_bytes_(RuntimeContext::extra_args_size) {
-  arr_access.resize(kernel.args.size(), irpass::ExternalPtrAccess(0));
-  arg_attribs_vec_.reserve(kernel.args.size());
+  arr_access.resize(kernel.parameter_list.size(), irpass::ExternalPtrAccess(0));
+  arg_attribs_vec_.reserve(kernel.parameter_list.size());
   // TODO: We should be able to limit Kernel args and rets to be primitive types
   // as well but let's leave that as a followup up PR.
-  for (const auto &ka : kernel.args) {
+  for (const auto &ka : kernel.parameter_list) {
     ArgAttributes aa;
     aa.dtype = ka.get_element_type()->as<PrimitiveType>()->type;
     const size_t dt_bytes = ka.get_element_size();
@@ -115,7 +115,7 @@ KernelContextAttributes::KernelContextAttributes(const Kernel &kernel,
   TI_TRACE("args:");
   args_bytes_ = arange_args(
       &arg_attribs_vec_, 0, false,
-      device->get_cap(DeviceCapability::spirv_has_physical_storage_buffer));
+      caps->get(DeviceCapability::spirv_has_physical_storage_buffer));
   // Align to extra args
   args_bytes_ = (args_bytes_ + 4 - 1) / 4 * 4;
 
@@ -127,5 +127,4 @@ KernelContextAttributes::KernelContextAttributes(const Kernel &kernel,
 }
 
 }  // namespace spirv
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

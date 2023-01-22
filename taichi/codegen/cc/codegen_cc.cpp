@@ -11,13 +11,22 @@
 
 #define C90_COMPAT 0
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 namespace cccp {  // Codegen for C Compiler Processor
 
 namespace {
 std::string get_node_ptr_name(SNode *snode) {
   return fmt::format("struct Ti_{} *", snode->get_node_type_name_hinted());
 }
+
+static void lower_ast(const CompileConfig &config, Kernel *kernel) {
+  auto ir = kernel->ir.get();
+  irpass::compile_to_executable(ir, config, kernel,
+                                /*autodiff_mode=*/kernel->autodiff_mode,
+                                /*ad_use_stack=*/true, config.print_ir,
+                                /*lower_global_access*/ true);
+}
+
 }  // namespace
 
 class CCTransformer : public IRVisitor {
@@ -38,20 +47,9 @@ class CCTransformer : public IRVisitor {
   }
 
   void run() {
-    this->lower_ast();
     emit_header("void Tk_{}(struct Ti_Context *ti_ctx) {{", kernel_->name);
     kernel_->ir->accept(this);
     emit("}}");
-  }
-
-  void lower_ast() {
-    auto ir = kernel_->ir.get();
-    auto config = kernel_->program->config;
-    config.demote_dense_struct_fors = true;
-    irpass::compile_to_executable(ir, config, kernel_,
-                                  /*autodiff_mode=*/kernel_->autodiff_mode,
-                                  /*ad_use_stack=*/true, config.print_ir,
-                                  /*lower_global_access*/ true);
   }
 
   std::string get_source() {
@@ -72,12 +70,6 @@ class CCTransformer : public IRVisitor {
   void visit(Stmt *stmt) override {
     TI_WARN("[cc] unsupported statement type {}\n{}", typeid(*stmt).name(),
             stmt->tb);
-  }
-
-  void visit(BitExtractStmt *stmt) override {
-    emit("{} = (({} >> {}) & ((1 << {}) - 1));",
-         define_var("Ti_i32", stmt->raw_name()), stmt->input->raw_name(),
-         stmt->bit_begin, stmt->bit_end - stmt->bit_begin);
   }
 
   std::string define_var(std::string const &type, std::string const &name) {
@@ -333,16 +325,6 @@ class CCTransformer : public IRVisitor {
         emit("{} = -({} {} {});", var, lhs_name, binop, rhs_name);
       } else if (bin->op_type == BinaryOpType::truediv) {
         emit("{} = ({}) {} / {};", var, dt_name, lhs_name, rhs_name);
-      } else if (bin->op_type == BinaryOpType::floordiv) {
-        auto lhs_dt_name = data_type_name(bin->lhs->element_type());
-        if (is_integral(bin->lhs->element_type()) &&
-            is_integral(bin->rhs->element_type())) {
-          emit("{} = Ti_floordiv_{}({}, {});", var, lhs_dt_name, lhs_name,
-               rhs_name);
-        } else {
-          emit("{} = Ti_floordiv_{}({}, {});", var, lhs_dt_name, lhs_name,
-               rhs_name);
-        }
       } else {
         emit("{} = {} {} {};", var, lhs_name, binop, rhs_name);
       }
@@ -603,6 +585,7 @@ class CCTransformer : public IRVisitor {
 };  // namespace cccp
 
 std::unique_ptr<CCKernel> CCKernelGen::compile() {
+  lower_ast(compile_config_, kernel_);
   auto layout = cc_program_impl_->get_layout();
   CCTransformer tran(kernel_, layout);
 
@@ -615,4 +598,4 @@ std::unique_ptr<CCKernel> CCKernelGen::compile() {
 }
 
 }  // namespace cccp
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

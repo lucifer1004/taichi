@@ -6,7 +6,27 @@ import operator as _bt_ops_mod  # bt for builtin
 from taichi._lib import core as _ti_core
 from taichi.lang import expr, impl
 from taichi.lang.exception import TaichiSyntaxError
-from taichi.lang.util import cook_dtype, is_taichi_class, taichi_scope
+from taichi.lang.field import Field
+from taichi.lang.util import (cook_dtype, is_matrix_class, is_taichi_class,
+                              taichi_scope)
+
+
+def uniform_matrix_inputs(*args):
+    has_real_matrix = False
+    for arg in args:
+        if is_taichi_expr(arg) and arg.ptr.is_tensor():
+            has_real_matrix = True
+            break
+
+    results = []
+    for arg in args:
+        if has_real_matrix and is_matrix_class(arg):
+            results.append(impl.expr_init(arg))
+        else:
+            results.append(arg)
+
+    return results
+
 
 unary_ops = []
 
@@ -51,6 +71,10 @@ def binary(foo):
 
     @functools.wraps(foo)
     def wrapped(a, b):
+        a, b = uniform_matrix_inputs(a, b)
+
+        if isinstance(a, Field) or isinstance(b, Field):
+            return NotImplemented
         if is_taichi_class(a):
             return a._element_wise_binary(imp_foo, b)
         if is_taichi_class(b):
@@ -79,6 +103,11 @@ def ternary(foo):
 
     @functools.wraps(foo)
     def wrapped(a, b, c):
+        a, b, c = uniform_matrix_inputs(a, b, c)
+
+        if isinstance(a, Field) or isinstance(b, Field) or isinstance(
+                c, Field):
+            return NotImplemented
         if is_taichi_class(a):
             return a._element_wise_ternary(abc_foo, b, c)
         if is_taichi_class(b):
@@ -101,6 +130,10 @@ def writeback_binary(foo):
 
     @functools.wraps(foo)
     def wrapped(a, b):
+        a, b = uniform_matrix_inputs(a, b)
+
+        if isinstance(a, Field) or isinstance(b, Field):
+            return NotImplemented
         if is_taichi_class(a):
             return a._element_wise_writeback_binary(imp_foo, b)
         if is_taichi_class(b):
@@ -729,37 +762,45 @@ def mod(x1, x2):
 
 
 @binary
-def pow(x, a):  # pylint: disable=W0622
-    """First array elements raised to powers from second array :math:`x^a`, element-wise.
+def pow(base, exponent):  # pylint: disable=W0622
+    """First array elements raised to second array elements :math:`{base}^{exponent}`, element-wise.
 
-    Negative values raised to a non-integral value will return `nan`.
-    A zero value raised to a negative value will return `inf`.
-    If debug mode or optimization passes are on, an exception will be raised
-    when an integral value is raised to a negative value; otherwise 1 will be returned.
+    The result type of two scalar operands is determined as follows:
+    - If the exponent is an integral value, then the result type takes the type of the base.
+    - Otherwise, the result type follows
+      [Implicit type casting in binary operations](https://docs.taichi-lang.org/docs/type#implicit-type-casting-in-binary-operations).
+
+    With the above rules, an integral value raised to a negative integral value cannot have a
+    feasible type. Therefore, an exception will be raised if debug mode or optimization passes
+    are on; otherwise 1 will be returned.
+
+    In the following situations, the result is undefined:
+    - A negative value raised to a non-integral value.
+    - A zero value raised to a non-positive value.
 
     Args:
-        x (Union[:mod:`~taichi.types.primitive_types`, :class:`~taichi.Matrix`]): \
+        base (Union[:mod:`~taichi.types.primitive_types`, :class:`~taichi.Matrix`]): \
             The bases.
-        a (Union[:mod:`~taichi.types.primitive_types`, :class:`~taichi.Matrix`]): \
+        exponent (Union[:mod:`~taichi.types.primitive_types`, :class:`~taichi.Matrix`]): \
             The exponents.
 
     Returns:
-        The bases in `x1` raised to the exponents in `x2`. This is a scalar if both \
-            `x1` and `x2` are scalars.
+        `base` raised to `exponent`. This is a scalar if both `base` and `exponent` are scalars.
 
     Example::
 
         >>> @ti.kernel
         >>> def test():
-        >>>     x = ti.Matrix([-2.0, 0.0, 2.0])
-        >>>     y = -2.2
+        >>>     x = ti.Matrix([-2.0, 2.0])
+        >>>     y = -3
         >>>     z = ti.pow(x, y)
         >>>     print(z)
         >>>
         >>> test()
-        [-nan, inf, 0.217638]
+        [-0.125000, 0.125000]
     """
-    return _binary_operation(_ti_core.expr_pow, _bt_ops_mod.pow, x, a)
+    return _binary_operation(_ti_core.expr_pow, _bt_ops_mod.pow, base,
+                             exponent)
 
 
 @binary
@@ -1415,7 +1456,7 @@ def atomic_xor(x, y):
 
 @writeback_binary
 def assign(a, b):
-    impl.get_runtime().prog.current_ast_builder().expr_assign(
+    impl.get_runtime().compiling_callable.ast_builder().expr_assign(
         a.ptr, b.ptr, stack_info())
     return a
 
@@ -1482,14 +1523,6 @@ def min(*args):  # pylint: disable=W0622
     if num_args == 2:
         return min_impl(args[0], args[1])
     return min_impl(args[0], min(*args[1:]))
-
-
-def ti_any(a):
-    return a.any()
-
-
-def ti_all(a):
-    return a.all()
 
 
 __all__ = [

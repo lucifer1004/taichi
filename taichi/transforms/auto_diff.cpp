@@ -8,18 +8,38 @@
 #include <typeinfo>
 #include <algorithm>
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
+
+class IndependentBlockMetaData {
+ public:
+  bool is_ib = true;
+  bool is_smallest_ib = true;
+};
+
+class NonLinearOps {
+ public:
+  inline static const std::set<TernaryOpType> ternary_collections{
+      TernaryOpType::select};
+  inline static const std::set<UnaryOpType> unary_collections{
+      UnaryOpType::abs,  UnaryOpType::sin,  UnaryOpType::cos,
+      UnaryOpType::tanh, UnaryOpType::asin, UnaryOpType::acos,
+      UnaryOpType::exp,  UnaryOpType::log,  UnaryOpType::sqrt};
+  inline static const std::set<BinaryOpType> binary_collections{
+      BinaryOpType::mul, BinaryOpType::div, BinaryOpType::atan2,
+      BinaryOpType::pow};
+};
+
 class IndependentBlocksJudger : public BasicStmtVisitor {
  public:
   using BasicStmtVisitor::visit;
 
   void visit(LocalLoadStmt *stmt) override {
-    TI_ASSERT(stmt->src->is<AllocaStmt>() || stmt->src->is<PtrOffsetStmt>());
+    TI_ASSERT(stmt->src->is<AllocaStmt>() || stmt->src->is<MatrixPtrStmt>());
     touched_allocas_.insert(stmt->src);
   }
 
   void visit(LocalStoreStmt *stmt) override {
-    TI_ASSERT(stmt->dest->is<AllocaStmt>() || stmt->dest->is<PtrOffsetStmt>());
+    TI_ASSERT(stmt->dest->is<AllocaStmt>() || stmt->dest->is<MatrixPtrStmt>());
     touched_allocas_.insert(stmt->dest);
   }
 
@@ -34,7 +54,23 @@ class IndependentBlocksJudger : public BasicStmtVisitor {
       return;
     TI_ASSERT(stmt->dest->is<GlobalPtrStmt>());
     if (stmt->dest->as<GlobalPtrStmt>()->snode->has_adjoint()) {
-      qualified_atomics_ = false;
+      qualified_glb_operations_ = true;
+    }
+  }
+
+  void visit(GlobalLoadStmt *stmt) override {
+    // We don't need to check the global load inside the range for-loops
+    // because
+    // 1. If the range for-loop is innermost, they will be captured by
+    // MakeAdjoint anyway
+    // 2. If the range for-loop is not innermost, they will be processed by
+    // another IndependentBlocksJudger
+    if (is_inside_loop_)
+      return;
+    // TODO: handle external ptr stmt after autodiff supporting ndarray
+    if (stmt->src->is<GlobalPtrStmt>() &&
+        stmt->src->as<GlobalPtrStmt>()->snode->has_adjoint()) {
+      qualified_glb_operations_ = true;
     }
   }
 
@@ -45,7 +81,7 @@ class IndependentBlocksJudger : public BasicStmtVisitor {
     is_inside_loop_ = false;
   }
 
-  static bool run(IRNode *root) {
+  static void run(IRNode *root, IndependentBlockMetaData &ib_meta_data) {
     IndependentBlocksJudger Judger;
     Block *block = root->as<Block>();
     root->accept(&Judger);
@@ -60,21 +96,25 @@ class IndependentBlocksJudger : public BasicStmtVisitor {
       // Test if the alloca belongs to the current block
       if (outside_blocks.find(alloca->parent) != outside_blocks.end()) {
         // This block is not an IB since it loads/modifies outside variables
-        return false;
+        ib_meta_data.is_ib = false;
       }
     }
 
     // To judge whether a block is an IB
-    // 1. No local load/store to allocas *outside* itself has been strictly
+    // - No local load/store to allocas *outside* itself has been strictly
     // enforced
-    // 2. If the #1 is satisfied, either an inner most loop or a block without
-    // global atomics is an IB
-    return Judger.qualified_atomics_ || Judger.inner_most_loop_;
+
+    // To judge whether a block is a smallest IB
+    // - If the #1 is satisfied, either an inner most loop or a block without
+    // global atomics / global load is an IB
+    ib_meta_data.is_smallest_ib =
+        ib_meta_data.is_ib &&
+        (Judger.qualified_glb_operations_ || Judger.inner_most_loop_);
   }
 
  private:
   std::set<Stmt *> touched_allocas_;
-  bool qualified_atomics_ = true;
+  bool qualified_glb_operations_ = false;
   bool inner_most_loop_ = true;
   bool is_inside_loop_ = false;
 };
@@ -153,26 +193,27 @@ class IdentifyIndependentBlocks : public BasicStmtVisitor {
     TI_ERROR("WhileControlStmt (break) is not supported in AutoDiff.");
   }
 
-  bool is_independent_block(Block *block) {
+  void visit_loop_body(Block *block) {
+    auto ib_meta_data = IndependentBlockMetaData();
     // An IB has no local load/store to allocas *outside* itself
     // Note:
     //  - Local atomics should have been demoted before this pass.
     //  - It is OK for an IB to have more than two for loops.
-    //  - No atomics operations to the global variables which require gradient
+    //  - No global load/atomics operations to the global variables which
+    //  require gradient
+    if (block->statements.empty()) {
+      // A empty block shoud be a smallest IB
+      ib_meta_data.is_ib = true;
+      ib_meta_data.is_smallest_ib = true;
+    } else {
+      IndependentBlocksJudger::run(block, ib_meta_data);
+    }
 
-    return IndependentBlocksJudger::run(block);
-  }
-
-  void visit_loop_body(Block *block) {
-    if (is_independent_block(block)) {
+    if (ib_meta_data.is_smallest_ib) {
+      independent_blocks_.push_back({depth_, block});
+    } else if (ib_meta_data.is_ib) {
       current_ib_ = block;
-      auto old_current_ib_ = current_ib_;
       block->accept(this);
-      // Lower level block is not an IB, therefore store the current block as an
-      // IB
-      if (old_current_ib_ == current_ib_) {
-        independent_blocks_.push_back({depth_, current_ib_});
-      }
     } else {
       if (depth_ <= 1) {
         TI_ASSERT(depth_ == 1);
@@ -239,7 +280,7 @@ class IdentifyIndependentBlocks : public BasicStmtVisitor {
 class PromoteSSA2LocalVar : public BasicStmtVisitor {
   using BasicStmtVisitor::visit;
 
-  PromoteSSA2LocalVar(Block *block) {
+  explicit PromoteSSA2LocalVar(Block *block) {
     alloca_block_ = block;
     invoke_default_visitor = true;
     execute_once_ = true;
@@ -249,8 +290,8 @@ class PromoteSSA2LocalVar : public BasicStmtVisitor {
     if (execute_once_)
       return;
     if (!(stmt->is<UnaryOpStmt>() || stmt->is<BinaryOpStmt>() ||
-          stmt->is<TernaryOpStmt>() || stmt->is<BitExtractStmt>() ||
-          stmt->is<GlobalLoadStmt>() || stmt->is<AllocaStmt>())) {
+          stmt->is<TernaryOpStmt>() || stmt->is<GlobalLoadStmt>() ||
+          stmt->is<AllocaStmt>())) {
       // TODO: this list may be incomplete
       return;
     }
@@ -307,15 +348,6 @@ class PromoteSSA2LocalVar : public BasicStmtVisitor {
 
 class AdStackAllocaJudger : public BasicStmtVisitor {
  public:
-  inline static const std::set<TernaryOpType> stack_needed_ternary_collections{
-      TernaryOpType::select};
-  inline static const std::set<UnaryOpType> stack_needed_unary_collections{
-      UnaryOpType::abs,  UnaryOpType::sin,  UnaryOpType::cos,
-      UnaryOpType::tanh, UnaryOpType::asin, UnaryOpType::acos,
-      UnaryOpType::exp,  UnaryOpType::log,  UnaryOpType::sqrt};
-  inline static const std::set<BinaryOpType> stack_needed_binary_collections{
-      BinaryOpType::mul, BinaryOpType::div, BinaryOpType::atan2,
-      BinaryOpType::pow};
   using BasicStmtVisitor::visit;
   // Find the usage of the stmt recursively along the LocalLoadStmt
   void visit(LocalLoadStmt *stmt) override {
@@ -357,8 +389,8 @@ class AdStackAllocaJudger : public BasicStmtVisitor {
   void visit(UnaryOpStmt *stmt) override {
     if (is_stack_needed_)
       return;
-    if (stack_needed_unary_collections.find(stmt->op_type) !=
-        stack_needed_unary_collections.end()) {
+    if (NonLinearOps::unary_collections.find(stmt->op_type) !=
+        NonLinearOps::unary_collections.end()) {
       if (stmt->operand == target_alloca_)
         is_stack_needed_ = true;
     }
@@ -369,8 +401,8 @@ class AdStackAllocaJudger : public BasicStmtVisitor {
   void visit(BinaryOpStmt *stmt) override {
     if (is_stack_needed_)
       return;
-    if (stack_needed_binary_collections.find(stmt->op_type) !=
-        stack_needed_binary_collections.end()) {
+    if (NonLinearOps::binary_collections.find(stmt->op_type) !=
+        NonLinearOps::binary_collections.end()) {
       if (stmt->lhs == target_alloca_ || stmt->rhs == target_alloca_)
         is_stack_needed_ = true;
     }
@@ -381,12 +413,28 @@ class AdStackAllocaJudger : public BasicStmtVisitor {
   void visit(TernaryOpStmt *stmt) override {
     if (is_stack_needed_)
       return;
-    if (stack_needed_ternary_collections.find(stmt->op_type) !=
-        stack_needed_ternary_collections.end()) {
+    if (NonLinearOps::ternary_collections.find(stmt->op_type) !=
+        NonLinearOps::ternary_collections.end()) {
       if (stmt->op1 == target_alloca_ || stmt->op2 == target_alloca_ ||
           stmt->op3 == target_alloca_)
         is_stack_needed_ = true;
     }
+  }
+
+  // Check whether the target serves as the condition of a if stmt
+  void visit(IfStmt *stmt) override {
+    if (is_stack_needed_)
+      return;
+
+    if (stmt->cond == target_alloca_) {
+      is_stack_needed_ = true;
+      return;
+    }
+
+    if (stmt->true_statements)
+      stmt->true_statements->accept(this);
+    if (stmt->false_statements)
+      stmt->false_statements->accept(this);
   }
 
   static bool run(AllocaStmt *target_alloca) {
@@ -420,7 +468,7 @@ class ReplaceLocalVarWithStacks : public BasicStmtVisitor {
       auto stack_alloca = Stmt::make<AdStackAllocaStmt>(dtype, ad_stack_size);
       auto stack_alloca_ptr = stack_alloca.get();
 
-      alloc->replace_with(std::move(stack_alloca));
+      alloc->replace_with(VecStatement(std::move(stack_alloca)));
 
       // Note that unlike AllocaStmt, AdStackAllocaStmt does NOT have an 0 as
       // initial value. Therefore here we push an initial 0 value.
@@ -446,7 +494,8 @@ class ReverseOuterLoops : public BasicStmtVisitor {
   using BasicStmtVisitor::visit;
 
  private:
-  ReverseOuterLoops(const std::set<Block *> &IB) : loop_depth_(0), ib_(IB) {
+  explicit ReverseOuterLoops(const std::set<Block *> &IB)
+      : loop_depth_(0), ib_(IB) {
   }
 
   bool is_ib(Block *block) const {
@@ -570,7 +619,7 @@ class ADTransform : public IRVisitor {
     // do nothing.
   }
 
-  void visit(PtrOffsetStmt *stmt) override {
+  void visit(MatrixPtrStmt *stmt) override {
     // do nothing.
   }
 
@@ -631,10 +680,6 @@ class ADTransform : public IRVisitor {
     // do nothing
   }
 
-  void visit(BitExtractStmt *stmt) override {
-    // do nothing
-  }
-
   void visit(IntegerOffsetStmt *stmt) override {
     // do nothing
   }
@@ -659,7 +704,7 @@ class MakeAdjoint : public ADTransform {
   Block *forward_backup;
   std::map<Stmt *, Stmt *> adjoint_stmt;
 
-  MakeAdjoint(Block *block) {
+  explicit MakeAdjoint(Block *block) {
     current_block = nullptr;
     alloca_block = block;
     forward_backup = block;
@@ -988,9 +1033,9 @@ class MakeAdjoint : public ADTransform {
 
     GlobalPtrStmt *src = nullptr;
     bool is_ptr_offset = false;
-    if (stmt->src->is<PtrOffsetStmt>()) {
+    if (stmt->src->is<MatrixPtrStmt>()) {
       is_ptr_offset = true;
-      src = stmt->src->as<PtrOffsetStmt>()->origin->as<GlobalPtrStmt>();
+      src = stmt->src->as<MatrixPtrStmt>()->origin->as<GlobalPtrStmt>();
     } else {
       src = stmt->src->as<GlobalPtrStmt>();
     }
@@ -1008,8 +1053,8 @@ class MakeAdjoint : public ADTransform {
     snode = snode->get_adjoint();
     auto adj_ptr = insert<GlobalPtrStmt>(snode, src->indices);
     if (is_ptr_offset) {
-      adj_ptr = insert<PtrOffsetStmt>(adj_ptr,
-                                      stmt->src->as<PtrOffsetStmt>()->offset);
+      adj_ptr = insert<MatrixPtrStmt>(adj_ptr,
+                                      stmt->src->as<MatrixPtrStmt>()->offset);
     }
     insert<AtomicOpStmt>(AtomicOpType::add, adj_ptr, load(adjoint(stmt)));
   }
@@ -1024,9 +1069,9 @@ class MakeAdjoint : public ADTransform {
 
     GlobalPtrStmt *dest = nullptr;
     bool is_ptr_offset = false;
-    if (stmt->dest->is<PtrOffsetStmt>()) {
+    if (stmt->dest->is<MatrixPtrStmt>()) {
       is_ptr_offset = true;
-      dest = stmt->dest->as<PtrOffsetStmt>()->origin->as<GlobalPtrStmt>();
+      dest = stmt->dest->as<MatrixPtrStmt>()->origin->as<GlobalPtrStmt>();
     } else {
       dest = stmt->dest->as<GlobalPtrStmt>();
     }
@@ -1040,10 +1085,16 @@ class MakeAdjoint : public ADTransform {
     snode = snode->get_adjoint();
     auto adjoint_ptr = insert<GlobalPtrStmt>(snode, dest->indices);
     if (is_ptr_offset) {
-      adjoint_ptr = insert<PtrOffsetStmt>(
-          adjoint_ptr, stmt->dest->as<PtrOffsetStmt>()->offset);
+      adjoint_ptr = insert<MatrixPtrStmt>(
+          adjoint_ptr, stmt->dest->as<MatrixPtrStmt>()->offset);
     }
     accumulate(stmt->val, insert<GlobalLoadStmt>(adjoint_ptr));
+
+    // Clear the gradient after accumulation finished.
+    auto zero = insert<ConstStmt>(
+        TypedConstant(adjoint_ptr->ret_type.ptr_removed(), 0));
+    insert<GlobalStoreStmt>(adjoint_ptr, zero);
+
     stmt->parent->erase(stmt);
   }
 
@@ -1051,9 +1102,9 @@ class MakeAdjoint : public ADTransform {
     // erase and replace with global load adjoint
     GlobalPtrStmt *dest = nullptr;
     bool is_ptr_offset = false;
-    if (stmt->dest->is<PtrOffsetStmt>()) {
+    if (stmt->dest->is<MatrixPtrStmt>()) {
       is_ptr_offset = true;
-      dest = stmt->dest->as<PtrOffsetStmt>()->origin->as<GlobalPtrStmt>();
+      dest = stmt->dest->as<MatrixPtrStmt>()->origin->as<GlobalPtrStmt>();
     } else {
       dest = stmt->dest->as<GlobalPtrStmt>();
     }
@@ -1068,8 +1119,8 @@ class MakeAdjoint : public ADTransform {
     snode = snode->get_adjoint();
     auto adjoint_ptr = insert<GlobalPtrStmt>(snode, dest->indices);
     if (is_ptr_offset) {
-      adjoint_ptr = insert<PtrOffsetStmt>(
-          adjoint_ptr, stmt->dest->as<PtrOffsetStmt>()->offset);
+      adjoint_ptr = insert<MatrixPtrStmt>(
+          adjoint_ptr, stmt->dest->as<MatrixPtrStmt>()->offset);
     }
     accumulate(stmt->val, insert<GlobalLoadStmt>(adjoint_ptr));
     stmt->parent->erase(stmt);
@@ -1085,7 +1136,7 @@ class MakeDual : public ADTransform {
   Block *alloca_block;
   std::map<Stmt *, Stmt *> dual_stmt;
 
-  MakeDual(Block *block) {
+  explicit MakeDual(Block *block) {
     current_stmt = nullptr;
     alloca_block = block;
     current_block = block;
@@ -1315,9 +1366,9 @@ class MakeDual : public ADTransform {
     // issue global store to dual
     GlobalPtrStmt *src = nullptr;
     bool is_ptr_offset = false;
-    if (stmt->src->is<PtrOffsetStmt>()) {
+    if (stmt->src->is<MatrixPtrStmt>()) {
       is_ptr_offset = true;
-      src = stmt->src->as<PtrOffsetStmt>()->origin->as<GlobalPtrStmt>();
+      src = stmt->src->as<MatrixPtrStmt>()->origin->as<GlobalPtrStmt>();
     } else {
       src = stmt->src->as<GlobalPtrStmt>();
     }
@@ -1334,8 +1385,8 @@ class MakeDual : public ADTransform {
     snode = snode->get_dual();
     auto dual_ptr = insert<GlobalPtrStmt>(snode, src->indices);
     if (is_ptr_offset) {
-      dual_ptr = insert<PtrOffsetStmt>(dual_ptr,
-                                       stmt->src->as<PtrOffsetStmt>()->offset);
+      dual_ptr = insert<MatrixPtrStmt>(dual_ptr,
+                                       stmt->src->as<MatrixPtrStmt>()->offset);
     }
     accumulate(stmt, insert<GlobalLoadStmt>(dual_ptr));
   }
@@ -1343,9 +1394,9 @@ class MakeDual : public ADTransform {
   void visit(GlobalStoreStmt *stmt) override {
     GlobalPtrStmt *dest = nullptr;
     bool is_ptr_offset = false;
-    if (stmt->dest->is<PtrOffsetStmt>()) {
+    if (stmt->dest->is<MatrixPtrStmt>()) {
       is_ptr_offset = true;
-      dest = stmt->dest->as<PtrOffsetStmt>()->origin->as<GlobalPtrStmt>();
+      dest = stmt->dest->as<MatrixPtrStmt>()->origin->as<GlobalPtrStmt>();
     } else {
       dest = stmt->dest->as<GlobalPtrStmt>();
     }
@@ -1358,8 +1409,8 @@ class MakeDual : public ADTransform {
     snode = snode->get_dual();
     auto dual_ptr = insert<GlobalPtrStmt>(snode, dest->indices);
     if (is_ptr_offset) {
-      dual_ptr = insert<PtrOffsetStmt>(dual_ptr,
-                                       stmt->dest->as<PtrOffsetStmt>()->offset);
+      dual_ptr = insert<MatrixPtrStmt>(dual_ptr,
+                                       stmt->dest->as<MatrixPtrStmt>()->offset);
     }
     insert<AtomicOpStmt>(AtomicOpType::add, dual_ptr, load(dual(stmt->val)));
   }
@@ -1367,9 +1418,9 @@ class MakeDual : public ADTransform {
   void visit(AtomicOpStmt *stmt) override {
     GlobalPtrStmt *dest = nullptr;
     bool is_ptr_offset = false;
-    if (stmt->dest->is<PtrOffsetStmt>()) {
+    if (stmt->dest->is<MatrixPtrStmt>()) {
       is_ptr_offset = true;
-      dest = stmt->dest->as<PtrOffsetStmt>()->origin->as<GlobalPtrStmt>();
+      dest = stmt->dest->as<MatrixPtrStmt>()->origin->as<GlobalPtrStmt>();
     } else {
       dest = stmt->dest->as<GlobalPtrStmt>();
     }
@@ -1382,8 +1433,8 @@ class MakeDual : public ADTransform {
     snode = snode->get_dual();
     auto dual_ptr = insert<GlobalPtrStmt>(snode, dest->indices);
     if (is_ptr_offset) {
-      dual_ptr = insert<PtrOffsetStmt>(dual_ptr,
-                                       stmt->dest->as<PtrOffsetStmt>()->offset);
+      dual_ptr = insert<MatrixPtrStmt>(dual_ptr,
+                                       stmt->dest->as<MatrixPtrStmt>()->offset);
     }
     insert<AtomicOpStmt>(AtomicOpType::add, dual_ptr, load(dual(stmt->val)));
   }
@@ -1396,7 +1447,8 @@ class BackupSSA : public BasicStmtVisitor {
   Block *independent_block;
   std::map<Stmt *, Stmt *> backup_alloca;
 
-  BackupSSA(Block *independent_block) : independent_block(independent_block) {
+  explicit BackupSSA(Block *independent_block)
+      : independent_block(independent_block) {
     allow_undefined_visitor = true;
     invoke_default_visitor = true;
   }
@@ -1612,4 +1664,4 @@ void differentiation_validation_check(IRNode *root,
 
 }  // namespace irpass
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

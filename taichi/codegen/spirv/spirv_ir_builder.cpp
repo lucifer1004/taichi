@@ -1,8 +1,7 @@
 #include "taichi/codegen/spirv/spirv_ir_builder.h"
 #include "taichi/rhi/dx/dx_device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace spirv {
 
@@ -12,9 +11,9 @@ void IRBuilder::init_header() {
   TI_ASSERT(header_.size() == 0U);
   header_.push_back(spv::MagicNumber);
 
-  header_.push_back(device_->get_cap(cap::spirv_version));
+  header_.push_back(caps_->get(cap::spirv_version));
 
-  TI_TRACE("SPIR-V Version {}", device_->get_cap(cap::spirv_version));
+  TI_TRACE("SPIR-V Version {}", caps_->get(cap::spirv_version));
 
   // generator: set to 0, unknown
   header_.push_back(0U);
@@ -26,25 +25,25 @@ void IRBuilder::init_header() {
   // capability
   ib_.begin(spv::OpCapability).add(spv::CapabilityShader).commit(&header_);
 
-  if (device_->get_cap(cap::spirv_has_atomic_float64_add)) {
+  if (caps_->get(cap::spirv_has_atomic_float64_add)) {
     ib_.begin(spv::OpCapability)
         .add(spv::CapabilityAtomicFloat64AddEXT)
         .commit(&header_);
   }
 
-  if (device_->get_cap(cap::spirv_has_atomic_float_add)) {
+  if (caps_->get(cap::spirv_has_atomic_float_add)) {
     ib_.begin(spv::OpCapability)
         .add(spv::CapabilityAtomicFloat32AddEXT)
         .commit(&header_);
   }
 
-  if (device_->get_cap(cap::spirv_has_atomic_float_minmax)) {
+  if (caps_->get(cap::spirv_has_atomic_float_minmax)) {
     ib_.begin(spv::OpCapability)
         .add(spv::CapabilityAtomicFloat32MinMaxEXT)
         .commit(&header_);
   }
 
-  if (device_->get_cap(cap::spirv_has_variable_ptr)) {
+  if (caps_->get(cap::spirv_has_variable_ptr)) {
     /*
     ib_.begin(spv::OpCapability)
         .add(spv::CapabilityVariablePointers)
@@ -55,22 +54,22 @@ void IRBuilder::init_header() {
         */
   }
 
-  if (device_->get_cap(cap::spirv_has_int8)) {
+  if (caps_->get(cap::spirv_has_int8)) {
     ib_.begin(spv::OpCapability).add(spv::CapabilityInt8).commit(&header_);
   }
-  if (device_->get_cap(cap::spirv_has_int16)) {
+  if (caps_->get(cap::spirv_has_int16)) {
     ib_.begin(spv::OpCapability).add(spv::CapabilityInt16).commit(&header_);
   }
-  if (device_->get_cap(cap::spirv_has_int64)) {
+  if (caps_->get(cap::spirv_has_int64)) {
     ib_.begin(spv::OpCapability).add(spv::CapabilityInt64).commit(&header_);
   }
-  if (device_->get_cap(cap::spirv_has_float16)) {
+  if (caps_->get(cap::spirv_has_float16)) {
     ib_.begin(spv::OpCapability).add(spv::CapabilityFloat16).commit(&header_);
   }
-  if (device_->get_cap(cap::spirv_has_float64)) {
+  if (caps_->get(cap::spirv_has_float64)) {
     ib_.begin(spv::OpCapability).add(spv::CapabilityFloat64).commit(&header_);
   }
-  if (device_->get_cap(cap::spirv_has_physical_storage_buffer)) {
+  if (caps_->get(cap::spirv_has_physical_storage_buffer)) {
     ib_.begin(spv::OpCapability)
         .add(spv::CapabilityPhysicalStorageBufferAddresses)
         .commit(&header_);
@@ -80,25 +79,37 @@ void IRBuilder::init_header() {
       .add("SPV_KHR_storage_buffer_storage_class")
       .commit(&header_);
 
-  if (device_->get_cap(cap::spirv_has_variable_ptr)) {
+  if (caps_->get(cap::spirv_has_no_integer_wrap_decoration)) {
+    ib_.begin(spv::OpExtension)
+        .add("SPV_KHR_no_integer_wrap_decoration")
+        .commit(&header_);
+  }
+
+  if (caps_->get(cap::spirv_has_non_semantic_info)) {
+    ib_.begin(spv::OpExtension)
+        .add("SPV_KHR_non_semantic_info")
+        .commit(&header_);
+  }
+
+  if (caps_->get(cap::spirv_has_variable_ptr)) {
     ib_.begin(spv::OpExtension)
         .add("SPV_KHR_variable_pointers")
         .commit(&header_);
   }
 
-  if (device_->get_cap(cap::spirv_has_atomic_float_add)) {
+  if (caps_->get(cap::spirv_has_atomic_float_add)) {
     ib_.begin(spv::OpExtension)
         .add("SPV_EXT_shader_atomic_float_add")
         .commit(&header_);
   }
 
-  if (device_->get_cap(cap::spirv_has_atomic_float_minmax)) {
+  if (caps_->get(cap::spirv_has_atomic_float_minmax)) {
     ib_.begin(spv::OpExtension)
         .add("SPV_EXT_shader_atomic_float_min_max")
         .commit(&header_);
   }
 
-  if (device_->get_cap(cap::spirv_has_physical_storage_buffer)) {
+  if (caps_->get(cap::spirv_has_physical_storage_buffer)) {
     ib_.begin(spv::OpExtension)
         .add("SPV_KHR_physical_storage_buffer")
         .commit(&header_);
@@ -125,7 +136,8 @@ std::vector<uint32_t> IRBuilder::finalize() {
   data.insert(data.end(), header_.begin(), header_.end());
   data.insert(data.end(), entry_.begin(), entry_.end());
   data.insert(data.end(), exec_mode_.begin(), exec_mode_.end());
-  data.insert(data.end(), debug_.begin(), debug_.end());
+  data.insert(data.end(), strings_.begin(), strings_.end());
+  data.insert(data.end(), names_.begin(), names_.end());
   data.insert(data.end(), decorate_.begin(), decorate_.end());
   data.insert(data.end(), global_.begin(), global_.end());
   data.insert(data.end(), func_header_.begin(), func_header_.end());
@@ -135,26 +147,30 @@ std::vector<uint32_t> IRBuilder::finalize() {
 
 void IRBuilder::init_pre_defs() {
   ext_glsl450_ = ext_inst_import("GLSL.std.450");
+  if (caps_->get(cap::spirv_has_non_semantic_info)) {
+    debug_printf_ = ext_inst_import("NonSemantic.DebugPrintf");
+  }
+
   t_bool_ = declare_primitive_type(get_data_type<bool>());
-  if (device_->get_cap(cap::spirv_has_int8)) {
+  if (caps_->get(cap::spirv_has_int8)) {
     t_int8_ = declare_primitive_type(get_data_type<int8>());
     t_uint8_ = declare_primitive_type(get_data_type<uint8>());
   }
-  if (device_->get_cap(cap::spirv_has_int16)) {
+  if (caps_->get(cap::spirv_has_int16)) {
     t_int16_ = declare_primitive_type(get_data_type<int16>());
     t_uint16_ = declare_primitive_type(get_data_type<uint16>());
   }
   t_int32_ = declare_primitive_type(get_data_type<int32>());
   t_uint32_ = declare_primitive_type(get_data_type<uint32>());
-  if (device_->get_cap(cap::spirv_has_int64)) {
+  if (caps_->get(cap::spirv_has_int64)) {
     t_int64_ = declare_primitive_type(get_data_type<int64>());
     t_uint64_ = declare_primitive_type(get_data_type<uint64>());
   }
   t_fp32_ = declare_primitive_type(get_data_type<float32>());
-  if (device_->get_cap(cap::spirv_has_float16)) {
+  if (caps_->get(cap::spirv_has_float16)) {
     t_fp16_ = declare_primitive_type(PrimitiveType::f16);
   }
-  if (device_->get_cap(cap::spirv_has_float64)) {
+  if (caps_->get(cap::spirv_has_float64)) {
     t_fp64_ = declare_primitive_type(get_data_type<float64>());
   }
   // declare void, and void functions
@@ -205,6 +221,12 @@ void IRBuilder::init_pre_defs() {
   // pre-defined constants
   const_i32_zero_ = int_immediate_number(t_int32_, 0);
   const_i32_one_ = int_immediate_number(t_int32_, 1);
+}
+
+Value IRBuilder::debug_string(std::string s) {
+  Value val = new_value(SType(), ValueKind::kNormal);
+  ib_.begin(spv::OpString).add_seq(val, s).commit(&strings_);
+  return val;
 }
 
 PhiValue IRBuilder::make_phi(const SType &out_type, uint32_t num_incoming) {
@@ -264,41 +286,41 @@ SType IRBuilder::get_primitive_type(const DataType &dt) const {
   if (dt->is_primitive(PrimitiveTypeID::u1)) {
     return t_bool_;
   } else if (dt->is_primitive(PrimitiveTypeID::f16)) {
-    if (!device_->get_cap(cap::spirv_has_float16))
+    if (!caps_->get(cap::spirv_has_float16))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_fp16_;
   } else if (dt->is_primitive(PrimitiveTypeID::f32)) {
     return t_fp32_;
   } else if (dt->is_primitive(PrimitiveTypeID::f64)) {
-    if (!device_->get_cap(cap::spirv_has_float64))
+    if (!caps_->get(cap::spirv_has_float64))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_fp64_;
   } else if (dt->is_primitive(PrimitiveTypeID::i8)) {
-    if (!device_->get_cap(cap::spirv_has_int8))
+    if (!caps_->get(cap::spirv_has_int8))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_int8_;
   } else if (dt->is_primitive(PrimitiveTypeID::i16)) {
-    if (!device_->get_cap(cap::spirv_has_int16))
+    if (!caps_->get(cap::spirv_has_int16))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_int16_;
   } else if (dt->is_primitive(PrimitiveTypeID::i32)) {
     return t_int32_;
   } else if (dt->is_primitive(PrimitiveTypeID::i64)) {
-    if (!device_->get_cap(cap::spirv_has_int64))
+    if (!caps_->get(cap::spirv_has_int64))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_int64_;
   } else if (dt->is_primitive(PrimitiveTypeID::u8)) {
-    if (!device_->get_cap(cap::spirv_has_int8))
+    if (!caps_->get(cap::spirv_has_int8))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_uint8_;
   } else if (dt->is_primitive(PrimitiveTypeID::u16)) {
-    if (!device_->get_cap(cap::spirv_has_int16))
+    if (!caps_->get(cap::spirv_has_int16))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_uint16_;
   } else if (dt->is_primitive(PrimitiveTypeID::u32)) {
     return t_uint32_;
   } else if (dt->is_primitive(PrimitiveTypeID::u64)) {
-    if (!device_->get_cap(cap::spirv_has_int64))
+    if (!caps_->get(cap::spirv_has_int64))
       TI_ERROR("Type {} not supported.", dt->to_string());
     return t_uint64_;
   } else {
@@ -370,13 +392,15 @@ SType IRBuilder::get_pointer_type(const SType &value_type,
   return t;
 }
 
-SType IRBuilder::get_sampled_image_type(const SType &primitive_type,
-                                        int num_dimensions) {
+SType IRBuilder::get_underlying_image_type(const SType &primitive_type,
+                                           int num_dimensions) {
   auto key = std::make_pair(primitive_type.id, num_dimensions);
-  auto it = sampled_image_ptr_tbl_.find(key);
-  if (it != sampled_image_ptr_tbl_.end()) {
+
+  auto it = sampled_image_underlying_image_type_.find(key);
+  if (it != sampled_image_underlying_image_type_.end()) {
     return it->second;
   }
+
   int img_id = id_counter_++;
   spv::Dim dim;
   if (num_dimensions == 1) {
@@ -393,6 +417,26 @@ SType IRBuilder::get_sampled_image_type(const SType &primitive_type,
                /*Depth=*/0, /*Arrayed=*/0, /*MS=*/0, /*Sampled=*/1,
                spv::ImageFormatUnknown)
       .commit(&global_);
+
+  SType image_type;
+  image_type.id = img_id;
+  image_type.flag = TypeKind::kImage;
+  sampled_image_underlying_image_type_[key] = image_type;
+
+  return image_type;
+}
+
+SType IRBuilder::get_sampled_image_type(const SType &primitive_type,
+                                        int num_dimensions) {
+  auto key = std::make_pair(primitive_type.id, num_dimensions);
+  auto it = sampled_image_ptr_tbl_.find(key);
+  if (it != sampled_image_ptr_tbl_.end()) {
+    return it->second;
+  }
+
+  SType image_type = get_underlying_image_type(primitive_type, num_dimensions);
+  int img_id = image_type.id;
+
   SType sampled_t;
   sampled_t.id = id_counter_++;
   sampled_t.flag = TypeKind::kImage;
@@ -400,6 +444,7 @@ SType IRBuilder::get_sampled_image_type(const SType &primitive_type,
       .add_seq(sampled_t, img_id)
       .commit(&global_);
   sampled_image_ptr_tbl_[key] = sampled_t;
+
   return sampled_t;
 }
 
@@ -477,7 +522,7 @@ SType IRBuilder::get_storage_image_type(BufferFormat format,
 
 SType IRBuilder::get_storage_pointer_type(const SType &value_type) {
   spv::StorageClass storage_class;
-  if (device_->get_cap(cap::spirv_version) < 0x10300) {
+  if (caps_->get(cap::spirv_version) < 0x10300) {
     storage_class = spv::StorageClassUniform;
   } else {
     storage_class = spv::StorageClassStorageBuffer;
@@ -543,7 +588,7 @@ SType IRBuilder::get_struct_array_type(const SType &value_type,
       .add_seq(struct_type, 0, spv::DecorationOffset, 0)
       .commit(&decorate_);
 
-  if (device_->get_cap(cap::spirv_version) < 0x10300) {
+  if (caps_->get(cap::spirv_version) < 0x10300) {
     // NOTE: BufferBlock was deprecated in SPIRV 1.3
     // use StorageClassStorageBuffer instead.
     // runtime array are always decorated as BufferBlock(shader storage buffer)
@@ -575,7 +620,7 @@ SType IRBuilder::create_struct_type(
   for (auto &[type, name, offset] : components) {
     this->decorate(spv::OpMemberDecorate, struct_type, i, spv::DecorationOffset,
                    offset);
-    this->debug(spv::OpMemberName, struct_type, i, name);
+    this->debug_name(spv::OpMemberName, struct_type, i, name);
     i++;
   }
 
@@ -589,15 +634,15 @@ Value IRBuilder::buffer_struct_argument(const SType &struct_type,
   // NOTE: BufferBlock was deprecated in SPIRV 1.3
   // use StorageClassStorageBuffer instead.
   spv::StorageClass storage_class;
-  if (device_->get_cap(cap::spirv_version) < 0x10300) {
+  if (caps_->get(cap::spirv_version) < 0x10300) {
     storage_class = spv::StorageClassUniform;
   } else {
     storage_class = spv::StorageClassStorageBuffer;
   }
 
-  this->debug(spv::OpName, struct_type, name + "_t");
+  this->debug_name(spv::OpName, struct_type, name + "_t");
 
-  if (device_->get_cap(cap::spirv_version) < 0x10300) {
+  if (caps_->get(cap::spirv_version) < 0x10300) {
     // NOTE: BufferBlock was deprecated in SPIRV 1.3
     // use StorageClassStorageBuffer instead.
     // runtime array are always decorated as BufferBlock(shader storage buffer)
@@ -608,14 +653,14 @@ Value IRBuilder::buffer_struct_argument(const SType &struct_type,
 
   SType ptr_type = get_pointer_type(struct_type, storage_class);
 
-  this->debug(spv::OpName, ptr_type, name + "_ptr");
+  this->debug_name(spv::OpName, ptr_type, name + "_ptr");
 
   Value val = new_value(ptr_type, ValueKind::kStructArrayPtr);
   ib_.begin(spv::OpVariable)
       .add_seq(ptr_type, val, storage_class)
       .commit(&global_);
 
-  this->debug(spv::OpName, val, name);
+  this->debug_name(spv::OpName, val, name);
 
   this->decorate(spv::OpDecorate, val, spv::DecorationDescriptorSet,
                  descriptor_set);
@@ -631,20 +676,20 @@ Value IRBuilder::uniform_struct_argument(const SType &struct_type,
   // use StorageClassStorageBuffer instead.
   spv::StorageClass storage_class = spv::StorageClassUniform;
 
-  this->debug(spv::OpName, struct_type, name + "_t");
+  this->debug_name(spv::OpName, struct_type, name + "_t");
 
   this->decorate(spv::OpDecorate, struct_type, spv::DecorationBlock);
 
   SType ptr_type = get_pointer_type(struct_type, storage_class);
 
-  this->debug(spv::OpName, ptr_type, name + "_ptr");
+  this->debug_name(spv::OpName, ptr_type, name + "_ptr");
 
   Value val = new_value(ptr_type, ValueKind::kStructArrayPtr);
   ib_.begin(spv::OpVariable)
       .add_seq(ptr_type, val, storage_class)
       .commit(&global_);
 
-  this->debug(spv::OpName, val, name);
+  this->debug_name(spv::OpName, val, name);
 
   this->decorate(spv::OpDecorate, val, spv::DecorationDescriptorSet,
                  descriptor_set);
@@ -659,7 +704,7 @@ Value IRBuilder::buffer_argument(const SType &value_type,
   // NOTE: BufferBlock was deprecated in SPIRV 1.3
   // use StorageClassStorageBuffer instead.
   spv::StorageClass storage_class;
-  if (device_->get_cap(cap::spirv_version) < 0x10300) {
+  if (caps_->get(cap::spirv_version) < 0x10300) {
     storage_class = spv::StorageClassUniform;
   } else {
     storage_class = spv::StorageClassStorageBuffer;
@@ -669,18 +714,18 @@ Value IRBuilder::buffer_argument(const SType &value_type,
 
   auto typed_name = name + "_" + value_type.dt.to_string();
 
-  this->debug(spv::OpName, sarr_type, typed_name + "_struct_array");
+  this->debug_name(spv::OpName, sarr_type, typed_name + "_struct_array");
 
   SType ptr_type = get_pointer_type(sarr_type, storage_class);
 
-  this->debug(spv::OpName, sarr_type, typed_name + "_ptr");
+  this->debug_name(spv::OpName, sarr_type, typed_name + "_ptr");
 
   Value val = new_value(ptr_type, ValueKind::kStructArrayPtr);
   ib_.begin(spv::OpVariable)
       .add_seq(ptr_type, val, storage_class)
       .commit(&global_);
 
-  this->debug(spv::OpName, val, typed_name);
+  this->debug_name(spv::OpName, val, typed_name);
 
   this->decorate(spv::OpDecorate, val, spv::DecorationDescriptorSet,
                  descriptor_set);
@@ -695,7 +740,7 @@ Value IRBuilder::struct_array_access(const SType &res_type,
   TI_ASSERT(res_type.flag == TypeKind::kPrimitive);
 
   spv::StorageClass storage_class;
-  if (device_->get_cap(cap::spirv_version) < 0x10300) {
+  if (caps_->get(cap::spirv_version) < 0x10300) {
     storage_class = spv::StorageClassUniform;
   } else {
     storage_class = spv::StorageClassStorageBuffer;
@@ -727,7 +772,7 @@ Value IRBuilder::texture_argument(int num_channels,
                  descriptor_set);
   this->decorate(spv::OpDecorate, val, spv::DecorationBinding, binding);
 
-  this->debug(spv::OpName, val, "tex");
+  this->debug_name(spv::OpName, val, "tex");
 
   this->global_values.push_back(val);
 
@@ -752,7 +797,7 @@ Value IRBuilder::storage_image_argument(int num_channels,
                  descriptor_set);
   this->decorate(spv::OpDecorate, val, spv::DecorationBinding, binding);
 
-  this->debug(spv::OpName, val, "tex");
+  this->debug_name(spv::OpName, val, "tex");
 
   this->global_values.push_back(val);
 
@@ -784,8 +829,14 @@ Value IRBuilder::sample_texture(Value texture_var,
 Value IRBuilder::fetch_texel(Value texture_var,
                              const std::vector<Value> &args,
                              Value lod) {
-  auto image = this->load_variable(
+  auto sampled_image = this->load_variable(
       texture_var, this->get_sampled_image_type(f32_type(), args.size()));
+
+  // OpImageFetch requires operand with OpImageType
+  // We have to extract the underlying OpImage from OpSampledImage here
+  SType image_type = get_underlying_image_type(f32_type(), args.size());
+  Value image_val = make_value(spv::OpImage, image_type, sampled_image);
+
   Value uv;
   if (args.size() == 1) {
     uv = args[0];
@@ -798,8 +849,8 @@ Value IRBuilder::fetch_texel(Value texture_var,
     TI_ERROR("Unsupported number of texture coordinates");
   }
   uint32_t lod_operand = 0x2;
-  auto res_vec4 =
-      make_value(spv::OpImageFetch, t_v4_fp32_, image, uv, lod_operand, lod);
+  auto res_vec4 = make_value(spv::OpImageFetch, t_v4_fp32_, image_val, uv,
+                             lod_operand, lod);
   return res_vec4;
 }
 
@@ -1012,6 +1063,8 @@ DEFINE_BUILDER_CMP_OP(ge, GreaterThanEqual);
     const auto &bool_type = t_bool_; /* TODO: Only scalar supported now */ \
     if (is_integral(a.stype.dt)) {                                         \
       return make_value(spv::OpI##_Op, bool_type, a, b);                   \
+    } else if (a.stype.id == bool_type.id) {                               \
+      return make_value(spv::OpLogical##_Op, bool_type, a, b);             \
     } else {                                                               \
       TI_ASSERT(is_real(a.stype.dt));                                      \
       return make_value(spv::OpFOrd##_Op, bool_type, a, b);                \
@@ -1020,6 +1073,13 @@ DEFINE_BUILDER_CMP_OP(ge, GreaterThanEqual);
 
 DEFINE_BUILDER_CMP_UOP(eq, Equal);
 DEFINE_BUILDER_CMP_UOP(ne, NotEqual);
+
+Value IRBuilder::bit_field_extract(Value base, Value offset, Value count) {
+  TI_ASSERT(is_integral(base.stype.dt));
+  TI_ASSERT(is_integral(offset.stype.dt));
+  TI_ASSERT(is_integral(count.stype.dt));
+  return make_value(spv::OpBitFieldUExtract, base.stype, base, offset, count);
+}
 
 Value IRBuilder::select(Value cond, Value a, Value b) {
   TI_ASSERT(a.stype.id == b.stype.id);
@@ -1153,8 +1213,7 @@ Value IRBuilder::load_variable(Value pointer, const SType &res_type) {
             pointer.flag == ValueKind::kPhysicalPtr);
   Value ret = new_value(res_type, ValueKind::kNormal);
   if (pointer.flag == ValueKind::kPhysicalPtr) {
-    Value alignment =
-        uint_immediate_number(t_uint32_, get_primitive_type_size(res_type.dt));
+    uint32_t alignment = uint32_t(get_primitive_type_size(res_type.dt));
     ib_.begin(spv::OpLoad)
         .add_seq(res_type, ret, pointer, spv::MemoryAccessAlignedMask,
                  alignment)
@@ -1169,8 +1228,7 @@ void IRBuilder::store_variable(Value pointer, Value value) {
             pointer.flag == ValueKind::kPhysicalPtr);
   TI_ASSERT(value.stype.id == pointer.stype.element_type_id);
   if (pointer.flag == ValueKind::kPhysicalPtr) {
-    Value alignment = uint_immediate_number(
-        t_uint32_, get_primitive_type_size(value.stype.dt));
+    uint32_t alignment = uint32_t(get_primitive_type_size(value.stype.dt));
     ib_.begin(spv::OpStore)
         .add_seq(pointer, value, spv::MemoryAccessAlignedMask, alignment)
         .commit(&function_);
@@ -1184,7 +1242,7 @@ void IRBuilder::register_value(std::string name, Value value) {
   if (it != value_name_tbl_.end() && it->second.flag != ValueKind::kConstant) {
     TI_ERROR("{} already exists.", name);
   }
-  this->debug(
+  this->debug_name(
       spv::OpName, value,
       fmt::format("{}_{}", name, value.stype.dt.to_string()));  // Debug info
   value_name_tbl_[name] = value;
@@ -1422,13 +1480,13 @@ void IRBuilder::init_random_function(Value global_tmp_) {
   ib_.begin(spv::OpVariable)
       .add_seq(local_type, rand_w_, spv::StorageClassPrivate)
       .commit(&global_);
-  debug(spv::OpName, rand_x_, "_rand_x");
-  debug(spv::OpName, rand_y_, "_rand_y");
-  debug(spv::OpName, rand_z_, "_rand_z");
-  debug(spv::OpName, rand_w_, "_rand_w");
+  debug_name(spv::OpName, rand_x_, "_rand_x");
+  debug_name(spv::OpName, rand_y_, "_rand_y");
+  debug_name(spv::OpName, rand_z_, "_rand_z");
+  debug_name(spv::OpName, rand_w_, "_rand_w");
   SType gtmp_type = get_pointer_type(t_uint32_, spv::StorageClassStorageBuffer);
   Value rand_gtmp_ = new_value(gtmp_type, ValueKind::kVariablePtr);
-  debug(spv::OpName, rand_gtmp_, "rand_gtmp");
+  debug_name(spv::OpName, rand_gtmp_, "rand_gtmp");
 
   auto load_var = [&](Value pointer, const SType &res_type) {
     TI_ASSERT(pointer.flag == ValueKind::kVariablePtr ||
@@ -1511,7 +1569,7 @@ void IRBuilder::init_random_function(Value global_tmp_) {
 
 // use atomic increment for DX API to avoid error X3694
 #ifdef TI_WITH_DX11
-  if (dynamic_cast<const taichi::lang::directx11::Dx11Device *>(device_)) {
+  if (arch_ == Arch::dx11) {
     use_atomic_increment = true;
   }
 #endif
@@ -1541,5 +1599,4 @@ void IRBuilder::init_random_function(Value global_tmp_) {
 }
 
 }  // namespace spirv
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -11,8 +11,7 @@
 #include <deque>
 #include <set>
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace {
 
 class LowerAccess;
@@ -46,14 +45,11 @@ class LowerAccess : public IRVisitor {
   StructForStmt *current_struct_for;
   const std::vector<SNode *> &kernel_forces_no_activate;
   bool lower_atomic_ptr;
-  bool packed;
 
   LowerAccess(const std::vector<SNode *> &kernel_forces_no_activate,
-              bool lower_atomic_ptr,
-              bool packed)
+              bool lower_atomic_ptr)
       : kernel_forces_no_activate(kernel_forces_no_activate),
-        lower_atomic_ptr(lower_atomic_ptr),
-        packed(packed) {
+        lower_atomic_ptr(lower_atomic_ptr) {
     // TODO: change this to false
     allow_undefined_visitor = true;
     current_struct_for = nullptr;
@@ -99,9 +95,8 @@ class LowerAccess : public IRVisitor {
       // For ti.is_active
       TI_ASSERT(!activate);
     }
-    PtrLowererImpl lowerer{ptr->snode, ptr->indices,
-                           snode_op,   ptr->is_bit_vectorized,
-                           &lowered,   packed};
+    PtrLowererImpl lowerer{ptr->snode, ptr->indices, snode_op,
+                           ptr->is_bit_vectorized, &lowered};
     lowerer.set_pointer_needs_activation(activate);
     lowerer.set_lower_access(this);
     lowerer.run();
@@ -130,7 +125,7 @@ class LowerAccess : public IRVisitor {
   }
 
   // TODO: this seems to be redundant
-  void visit(PtrOffsetStmt *stmt) override {
+  void visit(MatrixPtrStmt *stmt) override {
     if (!stmt->is_unlowered_global_ptr())
       return;
     auto ptr = stmt->origin->as<GlobalPtrStmt>();
@@ -154,13 +149,12 @@ class LowerAccess : public IRVisitor {
 
   void visit(SNodeOpStmt *stmt) override {
     if (stmt->ptr->is<GlobalPtrStmt>()) {
-      if (SNodeOpStmt::activation_related(stmt->op_type) &&
-          stmt->snode->type != SNodeType::dynamic) {
-        auto lowered =
-            lower_ptr(stmt->ptr->as<GlobalPtrStmt>(), false, stmt->op_type);
+      auto global_ptr = stmt->ptr->as<GlobalPtrStmt>();
+      if (global_ptr->is_cell_access) {
+        auto lowered = lower_ptr(global_ptr, false, stmt->op_type);
         modifier.replace_with(stmt, std::move(lowered), true);
       } else if (stmt->op_type == SNodeOpType::get_addr) {
-        auto lowered = lower_ptr(stmt->ptr->as<GlobalPtrStmt>(), false);
+        auto lowered = lower_ptr(global_ptr, false);
         auto cast = lowered.push_back<UnaryOpStmt>(UnaryOpType::cast_bits,
                                                    lowered.back().get());
         cast->cast_type = TypeFactory::get_instance().get_primitive_type(
@@ -168,8 +162,8 @@ class LowerAccess : public IRVisitor {
         stmt->ptr = lowered.back().get();
         modifier.replace_with(stmt, std::move(lowered));
       } else {
-        auto lowered = lower_ptr(stmt->ptr->as<GlobalPtrStmt>(),
-                                 SNodeOpStmt::need_activation(stmt->op_type));
+        auto lowered =
+            lower_ptr(global_ptr, SNodeOpStmt::need_activation(stmt->op_type));
         stmt->ptr = lowered.back().get();
         modifier.insert_before(stmt, std::move(lowered));
       }
@@ -197,9 +191,8 @@ class LowerAccess : public IRVisitor {
 
   static bool run(IRNode *node,
                   const std::vector<SNode *> &kernel_forces_no_activate,
-                  bool lower_atomic,
-                  bool packed) {
-    LowerAccess inst(kernel_forces_no_activate, lower_atomic, packed);
+                  bool lower_atomic) {
+    LowerAccess inst(kernel_forces_no_activate, lower_atomic);
     bool modified = false;
     while (true) {
       node->accept(&inst);
@@ -290,12 +283,11 @@ namespace irpass {
 bool lower_access(IRNode *root,
                   const CompileConfig &config,
                   const LowerAccessPass::Args &args) {
-  bool modified = LowerAccess::run(root, args.kernel_forces_no_activate,
-                                   args.lower_atomic, config.packed);
+  bool modified =
+      LowerAccess::run(root, args.kernel_forces_no_activate, args.lower_atomic);
   type_check(root, config);
   return modified;
 }
 
 }  // namespace irpass
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

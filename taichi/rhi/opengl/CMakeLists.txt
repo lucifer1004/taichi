@@ -18,11 +18,9 @@ target_include_directories(${OPENGL_RHI}
     ${PROJECT_SOURCE_DIR}/external/glad/include
     ${PROJECT_SOURCE_DIR}/external/glfw/include
     ${PROJECT_SOURCE_DIR}/external/SPIRV-Cross
-    ${LLVM_INCLUDE_DIRS}
   )
 
+if(NOT ANDROID)
 target_link_libraries(opengl_rhi PRIVATE glfw)
-
-set(SPIRV_CROSS_CLI false)
-add_subdirectory(${PROJECT_SOURCE_DIR}/external/SPIRV-Cross ${PROJECT_BINARY_DIR}/external/SPIRV-Cross)
+endif()
 target_link_libraries(opengl_rhi PRIVATE spirv-cross-glsl spirv-cross-core)

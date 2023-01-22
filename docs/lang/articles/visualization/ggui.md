@@ -25,8 +25,9 @@ It is recommended that you familiarize yourself with GGUI through the examples i
 `ti.ui.Window(name, res)` creates a window.
 
 ```python
-window = ti.ui.Window('Window Title', (640, 360))
+window = ti.ui.Window('Window Title', res = (640, 360), pos = (150, 150))
 ```
+The argument `res` means resulotion(width and height) of the window, `pos` means the position of the window which origins from the left-top of your main screen.
 
 The following three types of objects can be displayed on a `ti.ui.Window`:
 
@@ -134,7 +135,7 @@ init_points_pos(points_pos)
 window = ti.ui.Window("Test for Drawing 3d-lines", (768, 768))
 canvas = window.get_canvas()
 scene = ti.ui.Scene()
-camera = ti.ui.make_camera()
+camera = ti.ui.Camera()
 camera.position(5, 2, 2)
 
 while window.running:
@@ -225,7 +226,7 @@ init_points_indices(points_indices)
 window = ti.ui.Window("Test for Drawing 3d-lines", (768, 768))
 canvas = window.get_canvas()
 scene = ti.ui.Scene()
-camera = ti.ui.make_camera()
+camera = ti.ui.Camera()
 camera.position(5, 2, 2)
 
 while window.running:
@@ -286,7 +287,7 @@ scene.mesh_instance(vertices, indices, transforms = m_transforms, instance_offse
 window = ti.ui.Window("Display Mesh", (1024, 1024), vsync=True)
 canvas = window.get_canvas()
 scene = ti.ui.Scene()
-camera = ti.ui.make_camera()
+camera = ti.ui.Camera()
 
 # slider_int usage
 some_int_type_value = 0
@@ -366,7 +367,7 @@ window_shape = (720, 1080)
 window = ti.ui.Window("Test for copy depth data", window_shape)
 canvas = window.get_canvas()
 scene = ti.ui.Scene()
-camera = ti.ui.make_camera()
+camera = ti.ui.Camera()
 
 # Get the shape of the window
 w, h = window.get_window_shape()

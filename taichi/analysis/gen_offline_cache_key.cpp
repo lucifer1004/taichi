@@ -8,8 +8,7 @@
 #include "taichi/program/function.h"
 #include "taichi/program/program.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace {
 
@@ -56,6 +55,8 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
  public:
   ASTSerializer(Program *prog, std::ostream *os)
       : ExpressionVisitor(true), prog_(prog), os_(os) {
+    // TODO(PGZXB): Set allow_undefined_visitor as false. (blocked by
+    // constant-folding)
     this->allow_undefined_visitor = true;
   }
 
@@ -160,10 +161,20 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->adjoint_checkbit);
   }
 
+  void visit(MatrixFieldExpression *expr) override {
+    emit(ExprOpCode::MatrixFieldExpression);
+    emit(expr->fields);
+    emit(expr->element_shape);
+    emit(expr->dynamic_index_stride);
+  }
+
   void visit(IndexExpression *expr) override {
     emit(ExprOpCode::IndexExpression);
     emit(expr->var);
-    emit(expr->indices.exprs);
+    for (auto &indices : expr->indices_group) {
+      emit(indices.exprs);
+    }
+    emit(expr->ret_shape);
   }
 
   void visit(MatrixExpression *expr) override {
@@ -172,14 +183,6 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     for (auto elt : expr->elements) {
       emit(elt);
     }
-  }
-
-  void visit(StrideExpression *expr) override {
-    emit(ExprOpCode::StrideExpression);
-    emit(expr->var);
-    emit(expr->indices.exprs);
-    emit(expr->shape);
-    emit(expr->stride);
   }
 
   void visit(RangeAssumptionExpression *expr) override {
@@ -213,7 +216,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->op_type);
     emit(expr->snode);
     emit(expr->indices.exprs);
-    emit(expr->value);
+    emit(expr->values);
   }
 
   void visit(ConstExpression *expr) override {
@@ -227,8 +230,8 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     emit(expr->axis);
   }
 
-  void visit(FuncCallExpression *expr) override {
-    emit(ExprOpCode::FuncCallExpression);
+  void visit(FrontendFuncCallStmt *expr) override {
+    emit(StmtOpCode::FrontendFuncCallStmt);
     emit(expr->func);
     emit(expr->args.exprs);
   }
@@ -261,6 +264,12 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   void visit(ReferenceExpression *expr) override {
     emit(ExprOpCode::ReferenceExpression);
     emit(expr->var);
+  }
+
+  void visit(GetElementExpression *expr) override {
+    emit(ExprOpCode::GetElementExpression);
+    emit(expr->src);
+    emit(expr->index);
   }
 
   void visit(Block *block) override {
@@ -338,7 +347,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
     for (const auto &c : stmt->contents) {
       emit(static_cast<std::uint8_t>(c.index()));
       if (std::holds_alternative<Expr>(c)) {
-        emit(std::get<Expr>(c).expr);
+        emit(std::get<Expr>(c));
       } else {
         emit(std::get<std::string>(c));
       }
@@ -562,7 +571,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
       emit(expr.const_value);
       emit(expr.atomic);
       auto *e = expr.expr.get();
-      emit(e->stmt);
+      emit(e->get_flattened_stmt());
       emit(e->attributes);
       emit(e->ret_type);
       expr.expr->accept(this);
@@ -612,9 +621,7 @@ class ASTSerializer : public IRVisitor, public ExpressionVisitor {
   }
 
 #define DEFINE_EMIT_ENUM(EnumType) \
-  void emit(EnumType type) {       \
-    emit_pod(type);                \
-  }
+  void emit(EnumType type) { emit_pod(type); }
 
   DEFINE_EMIT_ENUM(ExprOpCode);
   DEFINE_EMIT_ENUM(StmtOpCode);
@@ -649,5 +656,4 @@ void gen_offline_cache_key(Program *prog, IRNode *ast, std::ostream *os) {
   ASTSerializer::run(prog, ast, os);
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

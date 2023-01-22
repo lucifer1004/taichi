@@ -77,8 +77,8 @@ def test_python_scope_matmul():
     ti.init()
     a = np.array([[1, 2], [3, 4]])
     b = np.array([[5, 6], [7, 8]])
-    x = ti.Vector(a)
-    y = ti.Vector(b)
+    x = ti.Matrix(a)
+    y = ti.Matrix(b)
 
     result = (x @ y).to_numpy()
     expected = a @ b
@@ -124,7 +124,7 @@ def test_16_min_max():
     assert max_i16(a, b) == max(a, b)
 
 
-@test_utils.test(exclude=[ti.opengl, ti.cc])
+@test_utils.test(exclude=[ti.opengl, ti.gles, ti.cc])
 def test_32_min_max():
     @ti.kernel
     def min_u32(a: ti.u32, b: ti.u32) -> ti.u32:

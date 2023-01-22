@@ -1,7 +1,6 @@
 #include "taichi/rhi/cuda/cuda_device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace cuda {
 
@@ -77,13 +76,14 @@ void CudaDevice::dealloc_memory(DeviceAllocation handle) {
   }
 }
 
-void *CudaDevice::map(DeviceAllocation alloc) {
+RhiResult CudaDevice::map(DeviceAllocation alloc, void **mapped_ptr) {
   AllocInfo &info = allocations_[alloc.alloc_id];
   size_t size = info.size;
   info.mapped = new char[size];
   // FIXME: there should be a better way to do this...
   CUDADriver::get_instance().memcpy_device_to_host(info.mapped, info.ptr, size);
-  return info.mapped;
+  *mapped_ptr = info.mapped;
+  return RhiResult::success;
 }
 
 void CudaDevice::unmap(DeviceAllocation alloc) {
@@ -124,5 +124,4 @@ uint64 CudaDevice::fetch_result_uint64(int i, uint64 *result_buffer) {
   return ret;
 }
 }  // namespace cuda
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

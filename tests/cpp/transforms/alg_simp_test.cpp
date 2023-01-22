@@ -4,8 +4,7 @@
 #include "taichi/ir/transforms.h"
 #include "tests/cpp/program/test_program.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class AlgebraicSimplicationTest : public ::testing::Test {
  protected:
@@ -25,7 +24,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyAddZero) {
 
   auto func = []() {};
   auto kernel = std::make_unique<Kernel>(prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto global_load_addr =
       block->push_back<GlobalTemporaryStmt>(0, PrimitiveType::i32);
@@ -52,7 +50,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyMultiplyOne) {
 
   auto func = []() {};
   auto kernel = std::make_unique<Kernel>(prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto global_load_addr =
       block->push_back<GlobalTemporaryStmt>(0, PrimitiveType::f32);
@@ -84,7 +81,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyMultiplyZeroFastMath) {
   auto block = std::make_unique<Block>();
   auto func = []() {};
   auto kernel = std::make_unique<Kernel>(prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
 
   auto global_load_addr =
       block->push_back<GlobalTemporaryStmt>(0, PrimitiveType::i32);
@@ -101,7 +97,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyMultiplyZeroFastMath) {
 
   CompileConfig config_without_fast_math;
   config_without_fast_math.fast_math = false;
-  kernel->program->config = config_without_fast_math;
 
   irpass::type_check(block.get(), config_without_fast_math);
   EXPECT_EQ(block->size(), 8);
@@ -113,7 +108,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyMultiplyZeroFastMath) {
   EXPECT_EQ(block->size(), 3);  // one address, one one, one store
 
   block = std::make_unique<Block>();
-  block->kernel = kernel.get();
 
   global_load_addr =
       block->push_back<GlobalTemporaryStmt>(8, PrimitiveType::f32);
@@ -138,7 +132,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyMultiplyZeroFastMath) {
 
   CompileConfig config_with_fast_math;
   config_with_fast_math.fast_math = true;
-  kernel->program->config = config_with_fast_math;
 
   irpass::alg_simp(block.get(),
                    config_with_fast_math);  // should eliminate mul, add
@@ -162,7 +155,6 @@ TEST_F(AlgebraicSimplicationTest, SimplifyAndMinusOne) {
 
   auto func = []() {};
   auto kernel = std::make_unique<Kernel>(prog(), func, "fake_kernel");
-  block->kernel = kernel.get();
   irpass::type_check(block.get(), CompileConfig());
   EXPECT_EQ(block->size(), 6);
 
@@ -173,5 +165,4 @@ TEST_F(AlgebraicSimplicationTest, SimplifyAndMinusOne) {
   EXPECT_TRUE((*block)[0]->is<GlobalTemporaryStmt>());
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

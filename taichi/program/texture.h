@@ -7,12 +7,15 @@
 #include "taichi/ir/type_utils.h"
 #include "taichi/rhi/device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class Program;
 class Ndarray;
 class SNode;
+
+std::pair<DataType, uint32_t> buffer_format2type_channels(BufferFormat format);
+BufferFormat type_channels2buffer_format(const DataType &type,
+                                         uint32_t num_channels);
 
 class TI_DLL_EXPORT Texture {
  public:
@@ -46,6 +49,14 @@ class TI_DLL_EXPORT Texture {
 
   ~Texture();
 
+  BufferFormat get_buffer_format() const {
+    return format_;
+  }
+
+  std::array<int, 3> get_size() const {
+    return {width_, height_, depth_};
+  }
+
  private:
   DeviceAllocation texture_alloc_{kDeviceNullAllocation};
   DataType dtype_;
@@ -58,5 +69,4 @@ class TI_DLL_EXPORT Texture {
   Program *prog_{nullptr};
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

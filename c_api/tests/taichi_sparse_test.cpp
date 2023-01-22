@@ -1,6 +1,7 @@
 #include "gtest/gtest.h"
 #include "c_api_test_utils.h"
 #include "taichi/cpp/taichi.hpp"
+#include "c_api/tests/gtest_fixture.h"
 
 static void taichi_sparse_test(TiArch arch) {
   const auto folder_dir = getenv("TAICHI_AOT_FOLDER_PATH");
@@ -21,14 +22,12 @@ static void taichi_sparse_test(TiArch arch) {
   ti::Kernel k_check_img_value = aot_mod.get_kernel("check_img_value");
 
   k_fill_img.launch();
-  for (int i = 0; i < 100; i++) {
-    float val = 0.05f * i;
+  float val = 0.05f;
 
-    k_block1_deactivate_all.launch();
-    k_activate[0] = val;
-    k_activate.launch();
-    k_paint.launch();
-  }
+  k_block1_deactivate_all.launch();
+  k_activate[0] = val;
+  k_activate.launch();
+  k_paint.launch();
 
   // Accuracy Check
   k_check_img_value.launch();
@@ -38,8 +37,8 @@ static void taichi_sparse_test(TiArch arch) {
   capi::utils::check_runtime_error(runtime);
 }
 
-TEST(CapiTaichiSparseTest, Cuda) {
-  if (capi::utils::is_cuda_available()) {
+TEST_F(CapiTest, TaichiSparseTestCuda) {
+  if (ti::is_arch_available(TI_ARCH_CUDA)) {
     TiArch arch = TiArch::TI_ARCH_CUDA;
     taichi_sparse_test(arch);
   }

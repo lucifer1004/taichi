@@ -4,20 +4,19 @@
 #include "taichi/runtime/llvm/llvm_offline_cache.h"
 #include "taichi/runtime/llvm/llvm_aot_module_builder.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace cpu {
 
 class AotModuleBuilderImpl : public LlvmAotModuleBuilder {
  public:
-  explicit AotModuleBuilderImpl(LlvmProgramImpl *prog)
-      : LlvmAotModuleBuilder(prog) {
+  explicit AotModuleBuilderImpl(const CompileConfig *compile_config,
+                                LlvmProgramImpl *prog)
+      : LlvmAotModuleBuilder(compile_config, prog) {
   }
 
  private:
-  LLVMCompiledData compile_kernel(Kernel *kernel) override;
+  LLVMCompiledKernel compile_kernel(Kernel *kernel) override;
 };
 
 }  // namespace cpu
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -5,6 +5,7 @@ import traceback
 import numpy as np
 from colorama import Fore, Style
 from taichi._lib import core as _ti_core
+from taichi._logging import is_logging_effective
 from taichi.lang import impl
 from taichi.types.primitive_types import (f16, f32, f64, i8, i16, i32, i64, u8,
                                           u16, u32, u64)
@@ -65,6 +66,16 @@ def has_clangpp():
 
 def get_clangpp():
     return _clangpp_presence
+
+
+def is_matrix_class(rhs):
+    matrix_class = False
+    try:
+        if rhs._is_matrix_class:
+            matrix_class = True
+    except:
+        pass
+    return matrix_class
 
 
 def is_taichi_class(rhs):
@@ -268,6 +279,8 @@ def cook_dtype(dtype):
         return impl.get_runtime().default_fp
     if dtype is int:
         return impl.get_runtime().default_ip
+    if dtype is bool:
+        return i32  # TODO[Xiaoyan]: Use i1 in the future
     raise ValueError(f'Invalid data type {dtype}')
 
 
@@ -309,6 +322,8 @@ def warning(msg, warning_type=UserWarning, stacklevel=1, print_stack=True):
         stacklevel (int): warning stack level from the caller.
         print_stack (bool): whether to print the stack
     """
+    if not is_logging_effective('warn'):
+        return
     msg = f'{warning_type.__name__}: {msg}'
     if print_stack:
         msg += f'\n{get_traceback(stacklevel)}'

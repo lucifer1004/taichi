@@ -3,7 +3,7 @@
 #include "taichi/common/core.h"
 #include "taichi/util/bit.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 class TensorType;
 
@@ -40,6 +40,14 @@ class TI_DLL_EXPORT Type {
     return p;
   }
 
+  template <typename T>
+  const T *as() const {
+    auto p = dynamic_cast<const T *>(this);
+    TI_ASSERT_INFO(p != nullptr, "Cannot treat {} as {}", this->to_string(),
+                   typeid(T).name());
+    return p;
+  }
+
   bool is_primitive(PrimitiveTypeID type) const;
 
   virtual Type *get_compute_type() {
@@ -55,7 +63,8 @@ class TI_DLL_EXPORT DataType {
  public:
   DataType();
 
-  DataType(Type *ptr) : ptr_(ptr) {
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  DataType(const Type *ptr) : ptr_((Type *)ptr) {
   }
 
   DataType(const DataType &o) : ptr_(o.ptr_) {
@@ -75,10 +84,12 @@ class TI_DLL_EXPORT DataType {
     return ptr_->to_string();
   };
 
+  // NOLINTNEXTLINE(google-explicit-constructor)
   operator const Type *() const {
     return ptr_;
   }
 
+  // NOLINTNEXTLINE(google-explicit-constructor)
   operator Type *() {
     return ptr_;
   }
@@ -120,7 +131,7 @@ class TI_DLL_EXPORT PrimitiveType : public Type {
   // TODO(type): make 'type' private and add a const getter
   PrimitiveTypeID type;
 
-  PrimitiveType(PrimitiveTypeID type) : type(type) {
+  explicit PrimitiveType(PrimitiveTypeID type) : type(type) {
   }
 
   std::string to_string() const override;
@@ -188,6 +199,42 @@ class TensorType : public Type {
  private:
   std::vector<int> shape_;
   Type *element_{nullptr};
+};
+
+class StructType : public Type {
+ public:
+  explicit StructType(std::vector<const Type *> elements)
+      : elements_(std::move(elements)) {
+  }
+
+  std::string to_string() const override;
+
+  Type *get_element_type(const std::vector<int> &indices) const;
+  const std::vector<const Type *> &elements() const {
+    return elements_;
+  }
+
+  int get_num_elements() const {
+    int num = 0;
+    for (const auto &element : elements_) {
+      if (auto struct_type = element->cast<StructType>()) {
+        num += struct_type->get_num_elements();
+      } else if (auto tensor_type = element->cast<TensorType>()) {
+        num += tensor_type->get_num_elements();
+      } else {
+        TI_ASSERT(element->is<PrimitiveType>());
+        num += 1;
+      }
+    }
+    return num;
+  }
+
+  Type *get_compute_type() override {
+    return this;
+  }
+
+ private:
+  std::vector<const Type *> elements_;
 };
 
 class QuantIntType : public Type {
@@ -383,38 +430,41 @@ class TypedConstant {
   TypedConstant() : dt(PrimitiveType::unknown) {
   }
 
-  TypedConstant(DataType dt) : dt(dt) {
+  explicit TypedConstant(DataType dt) : dt(dt) {
+    TI_ASSERT_INFO(dt->is<PrimitiveType>(),
+                   "TypedConstant can only be PrimitiveType, got {}",
+                   dt->to_string());
     value_bits = 0;
   }
 
-  TypedConstant(int32 x) : dt(PrimitiveType::i32), val_i32(x) {
+  explicit TypedConstant(int32 x) : dt(PrimitiveType::i32), val_i32(x) {
   }
 
-  TypedConstant(float32 x) : dt(PrimitiveType::f32), val_f32(x) {
+  explicit TypedConstant(float32 x) : dt(PrimitiveType::f32), val_f32(x) {
   }
 
-  TypedConstant(int64 x) : dt(PrimitiveType::i64), val_i64(x) {
+  explicit TypedConstant(int64 x) : dt(PrimitiveType::i64), val_i64(x) {
   }
 
-  TypedConstant(float64 x) : dt(PrimitiveType::f64), val_f64(x) {
+  explicit TypedConstant(float64 x) : dt(PrimitiveType::f64), val_f64(x) {
   }
 
-  TypedConstant(int8 x) : dt(PrimitiveType::i8), val_i8(x) {
+  explicit TypedConstant(int8 x) : dt(PrimitiveType::i8), val_i8(x) {
   }
 
-  TypedConstant(int16 x) : dt(PrimitiveType::i16), val_i16(x) {
+  explicit TypedConstant(int16 x) : dt(PrimitiveType::i16), val_i16(x) {
   }
 
-  TypedConstant(uint8 x) : dt(PrimitiveType::u8), val_u8(x) {
+  explicit TypedConstant(uint8 x) : dt(PrimitiveType::u8), val_u8(x) {
   }
 
-  TypedConstant(uint16 x) : dt(PrimitiveType::u16), val_u16(x) {
+  explicit TypedConstant(uint16 x) : dt(PrimitiveType::u16), val_u16(x) {
   }
 
-  TypedConstant(uint32 x) : dt(PrimitiveType::u32), val_u32(x) {
+  explicit TypedConstant(uint32 x) : dt(PrimitiveType::u32), val_u32(x) {
   }
 
-  TypedConstant(uint64 x) : dt(PrimitiveType::u64), val_u64(x) {
+  explicit TypedConstant(uint64 x) : dt(PrimitiveType::u64), val_u64(x) {
   }
 
   template <typename T>
@@ -476,4 +526,4 @@ class TypedConstant {
   float64 val_cast_to_float64() const;
 };
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

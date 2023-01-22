@@ -9,13 +9,12 @@
 
 #include "taichi/codegen/wasm/codegen_wasm.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace wasm {
 
 class AotModuleBuilderImpl : public AotModuleBuilder {
  public:
-  explicit AotModuleBuilderImpl();
+  explicit AotModuleBuilderImpl(const CompileConfig *compile_config);
 
   void dump(const std::string &output_dir,
             const std::string &filename) const override;
@@ -35,10 +34,10 @@ class AotModuleBuilderImpl : public AotModuleBuilder {
 
  private:
   void eliminate_unused_functions() const;
+  const CompileConfig *compile_config_{nullptr};
   std::unique_ptr<llvm::Module> module_{nullptr};
   std::vector<std::string> name_list_;
 };
 
 }  // namespace wasm
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

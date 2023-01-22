@@ -2,7 +2,7 @@
 
 using namespace taichi::lang::cccp;
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 CCProgramImpl::CCProgramImpl(CompileConfig &config) : ProgramImpl(config) {
   this->config = &config;
@@ -15,8 +15,9 @@ CCProgramImpl::CCProgramImpl(CompileConfig &config) : ProgramImpl(config) {
   context_ = std::make_unique<CCContext>();
 }
 
-FunctionType CCProgramImpl::compile(Kernel *kernel, OffloadedStmt *) {
-  CCKernelGen codegen(kernel, this);
+FunctionType CCProgramImpl::compile(const CompileConfig &compile_config,
+                                    Kernel *kernel) {
+  CCKernelGen codegen(compile_config, kernel, this);
   auto ker = codegen.compile();
   auto ker_ptr = ker.get();
   this->add_kernel(std::move(ker));
@@ -197,4 +198,4 @@ bool is_c_backend_available() {
 }
 };  // namespace cccp
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

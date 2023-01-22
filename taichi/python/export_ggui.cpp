@@ -25,7 +25,7 @@ namespace py = pybind11;
 #include "taichi/program/ndarray.h"
 #include <memory>
 
-TI_UI_NAMESPACE_BEGIN
+namespace taichi::ui {
 
 using namespace taichi::lang;
 
@@ -62,6 +62,9 @@ struct PyGui {
   }
   void text(std::string text) {
     gui->text(text);
+  }
+  void text_colored(std::string text, py::tuple color) {
+    gui->text(text, tuple_to_vec3(color));
   }
   bool checkbox(std::string name, bool old_value) {
     return gui->checkbox(name, old_value);
@@ -290,6 +293,10 @@ struct PyCanvas {
     canvas->set_image({img});
   }
 
+  void set_image_texture(Texture *texture) {
+    canvas->set_image(texture);
+  }
+
   void scene(PyScene &scene) {
     canvas->scene(scene.scene);
   }
@@ -351,14 +358,20 @@ struct PyWindow {
   PyWindow(Program *prog,
            std::string name,
            py::tuple res,
+           py::tuple pos,
            bool vsync,
            bool show_window,
            std::string package_path,
-           Arch ti_arch,
-           bool is_packed_mode) {
-    AppConfig config = {name,    res[0].cast<int>(), res[1].cast<int>(),
-                        vsync,   show_window,        package_path,
-                        ti_arch, is_packed_mode};
+           Arch ti_arch) {
+    AppConfig config = {name,
+                        res[0].cast<int>(),
+                        res[1].cast<int>(),
+                        pos[0].cast<int>(),
+                        pos[1].cast<int>(),
+                        vsync,
+                        show_window,
+                        package_path,
+                        ti_arch};
     // todo: support other ggui backends
     if (!(taichi::arch_is_cpu(ti_arch) || ti_arch == Arch::vulkan ||
           ti_arch == Arch::cuda)) {
@@ -452,8 +465,8 @@ struct PyWindow {
     return canvas;
   }
 
-  PyGui GUI() {
-    PyGui gui = {window->GUI()};
+  PyGui gui() {
+    PyGui gui = {window->gui()};
     return gui;
   }
 
@@ -476,8 +489,8 @@ void export_ggui(py::module &m) {
   m.attr("GGUI_AVAILABLE") = py::bool_(true);
 
   py::class_<PyWindow>(m, "PyWindow")
-      .def(py::init<Program *, std::string, py::tuple, bool, bool, std::string,
-                    Arch, bool>())
+      .def(py::init<Program *, std::string, py::tuple, py::tuple, bool, bool,
+                    std::string, Arch>())
       .def("get_canvas", &PyWindow::get_canvas)
       .def("show", &PyWindow::show)
       .def("get_window_shape", &PyWindow::get_window_shape)
@@ -494,11 +507,12 @@ void export_ggui(py::module &m) {
       .def("get_current_event", &PyWindow::get_current_event)
       .def("set_current_event", &PyWindow::set_current_event)
       .def("destroy", &PyWindow::destroy)
-      .def("GUI", &PyWindow::GUI);
+      .def("GUI", &PyWindow::gui);
 
   py::class_<PyCanvas>(m, "PyCanvas")
       .def("set_background_color", &PyCanvas::set_background_color)
       .def("set_image", &PyCanvas::set_image)
+      .def("set_image_texture", &PyCanvas::set_image_texture)
       .def("triangles", &PyCanvas::triangles)
       .def("lines", &PyCanvas::lines)
       .def("circles", &PyCanvas::circles)
@@ -508,6 +522,7 @@ void export_ggui(py::module &m) {
       .def("begin", &PyGui::begin)
       .def("end", &PyGui::end)
       .def("text", &PyGui::text)
+      .def("text_colored", &PyGui::text_colored)
       .def("checkbox", &PyGui::checkbox)
       .def("slider_int", &PyGui::slider_int)
       .def("slider_float", &PyGui::slider_float)
@@ -587,24 +602,24 @@ void export_ggui(py::module &m) {
       .export_values();
 }
 
-TI_UI_NAMESPACE_END
+}  // namespace taichi::ui
 
-TI_NAMESPACE_BEGIN
+namespace taichi {
 
 void export_ggui(py::module &m) {
   ui::export_ggui(m);
 }
 
-TI_NAMESPACE_END
+}  // namespace taichi
 
 #else
 
-TI_NAMESPACE_BEGIN
+namespace taichi {
 
 void export_ggui(py::module &m) {
   m.attr("GGUI_AVAILABLE") = py::bool_(false);
 }
 
-TI_NAMESPACE_END
+}  // namespace taichi
 
 #endif

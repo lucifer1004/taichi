@@ -8,17 +8,16 @@
 
 #include <optional>
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class Function;
 
 /**
  * Allocate a local variable with initial value 0.
  */
-class AllocaStmt : public Stmt {
+class AllocaStmt : public Stmt, public ir_traits::Store {
  public:
-  AllocaStmt(DataType type) : is_shared(false) {
+  explicit AllocaStmt(DataType type) : is_shared(false) {
     ret_type = type;
     TI_STMT_REG_FIELDS;
   }
@@ -37,6 +36,18 @@ class AllocaStmt : public Stmt {
 
   bool common_statement_eliminable() const override {
     return false;
+  }
+
+  // IR Trait: Store
+  stmt_refs get_store_destination() const override {
+    // The statement itself provides a data source (const [0]).
+    return ret_type->is<TensorType>() ? nullptr : (Stmt *)this;
+  }
+
+  Stmt *get_store_data() const override {
+    // For convenience, return store_stmt instead of the const [0] it actually
+    // stores.
+    return ret_type->is<TensorType>() ? nullptr : (Stmt *)this;
   }
 
   bool is_shared;
@@ -160,13 +171,38 @@ class UnaryOpStmt : public Stmt {
 class ArgLoadStmt : public Stmt {
  public:
   int arg_id;
+
+  /* TODO(zhanlue): more organized argument-type information
+
+     ArgLoadStmt is able to load everything passed into the kernel,
+     including but not limited to: scalar, matrix, snode_tree_types(WIP),
+     ndarray, ...
+
+     Therefore we need to add a field to indicate the type of the argument. For
+     now, only "is_ptr" and "field_dims" is needed.
+
+  */
   bool is_ptr;
 
-  ArgLoadStmt(int arg_id, const DataType &dt, bool is_ptr = false)
+  bool is_grad;
+
+  // field_dims of ndarray
+  int field_dims_ = 0;
+
+  ArgLoadStmt(int arg_id,
+              const DataType &dt,
+              bool is_ptr = false,
+              bool is_grad = false)
       : arg_id(arg_id) {
     this->ret_type = dt;
     this->is_ptr = is_ptr;
+    this->is_grad = is_grad;
+    this->field_dims_ = -1;  // -1 means uninitialized
     TI_STMT_REG_FIELDS;
+  }
+
+  void set_extern_dims(int dims) {
+    this->field_dims_ = dims;
   }
 
   bool has_global_side_effect() const override {
@@ -188,7 +224,7 @@ class ArgLoadStmt : public Stmt {
  */
 class RandStmt : public Stmt {
  public:
-  RandStmt(const DataType &dt) {
+  explicit RandStmt(const DataType &dt) {
     ret_type = dt;
     TI_STMT_REG_FIELDS;
   }
@@ -263,7 +299,9 @@ class TernaryOpStmt : public Stmt {
 /**
  * An atomic operation.
  */
-class AtomicOpStmt : public Stmt {
+class AtomicOpStmt : public Stmt,
+                     public ir_traits::Store,
+                     public ir_traits::Load {
  public:
   AtomicOpType op_type;
   Stmt *dest, *val;
@@ -280,6 +318,20 @@ class AtomicOpStmt : public Stmt {
     auto stmt = std::make_unique<AtomicOpStmt>(op_type, dest, val);
     stmt->is_reduction = true;
     return stmt;
+  }
+
+  // IR Trait: Store
+  stmt_refs get_store_destination() const override {
+    return dest;
+  }
+
+  Stmt *get_store_data() const override {
+    return nullptr;
+  }
+
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return dest;
   }
 
   TI_STMT_DEF_FIELDS(ret_type, op_type, dest, val);
@@ -327,11 +379,13 @@ class GlobalPtrStmt : public Stmt {
   SNode *snode;
   std::vector<Stmt *> indices;
   bool activate;
+  bool is_cell_access;
   bool is_bit_vectorized;  // for bit_loop_vectorize pass
 
   GlobalPtrStmt(SNode *snode,
                 const std::vector<Stmt *> &indices,
-                bool activate = true);
+                bool activate = true,
+                bool is_cell_access = false);
 
   bool has_global_side_effect() const override {
     return activate;
@@ -346,40 +400,77 @@ class GlobalPtrStmt : public Stmt {
 };
 
 /**
- * An accessing tensor element operation.
+ * An "abstract" pointer for an element of a MatrixField, which logically
+ * contains a matrix of GlobalPtrStmts. Upon construction, only snodes, indices,
+ * dynamic_indexable, dynamic_index_stride and activate are initialized. After
+ * the lower_matrix_ptr pass, this stmt will either be eliminated (constant
+ * index) or have ptr_base initialized (dynamic index or whole-matrix access).
  */
-class PtrOffsetStmt : public Stmt {
+class MatrixOfGlobalPtrStmt : public Stmt {
+ public:
+  std::vector<SNode *> snodes;
+  std::vector<Stmt *> indices;
+  Stmt *ptr_base{nullptr};
+  bool dynamic_indexable{false};
+  int dynamic_index_stride{0};
+  bool activate{true};
+
+  MatrixOfGlobalPtrStmt(const std::vector<SNode *> &snodes,
+                        const std::vector<Stmt *> &indices,
+                        bool dynamic_indexable,
+                        int dynamic_index_stride,
+                        DataType dt,
+                        bool activate = true);
+
+  bool has_global_side_effect() const override {
+    return activate;
+  }
+
+  bool common_statement_eliminable() const override {
+    return true;
+  }
+
+  TI_STMT_DEF_FIELDS(ret_type,
+                     snodes,
+                     indices,
+                     ptr_base,
+                     dynamic_indexable,
+                     dynamic_index_stride,
+                     activate);
+  TI_DEFINE_ACCEPT_AND_CLONE
+};
+
+/**
+ * A matrix of MatrixPtrStmts. The purpose of this stmt is to handle matrix
+ * slice and vector swizzle. This stmt will be eliminated after the
+ * lower_matrix_ptr pass.
+ *
+ * TODO(yi/zhanlue): Keep scalarization pass alive for MatrixOfMatrixPtrStmt
+ * operations even with real_matrix_scalarize=False
+ */
+class MatrixOfMatrixPtrStmt : public Stmt {
+ public:
+  std::vector<Stmt *> stmts;
+
+  MatrixOfMatrixPtrStmt(const std::vector<Stmt *> &stmts, DataType dt);
+
+  TI_STMT_DEF_FIELDS(ret_type, stmts);
+  TI_DEFINE_ACCEPT_AND_CLONE
+};
+
+/**
+ * A pointer to an element of a matrix.
+ */
+class MatrixPtrStmt : public Stmt {
  public:
   Stmt *origin{nullptr};
   Stmt *offset{nullptr};
 
-  PtrOffsetStmt(Stmt *, Stmt *);
+  MatrixPtrStmt(Stmt *, Stmt *, const std::string & = "");
 
-  /* TODO(zhanlue/yi) Stop using llvm::AllocaInst with "ArraySize" argument so
-     that Alloca can return ArrayType.
+  /* TODO(zhanlue/yi): Unify semantics of offset in MatrixPtrStmt
 
-      Currently, AllocaStmt and GlobalTemporaryStmt uses llvm::AllocaInst with
-     "ArraySize" argument, which returns a pointer to the first element of the
-     array, instead of the array itself.
-
-      We would like to refactor this behaviour because:
-      1. It drops the array type information.
-      2. Causes crash on AMDGPU backend in certain circumstances.
-
-      https://llvm.org/doxygen/classllvm_1_1AllocaInst.html#ac68a7586b8be7de3c39531d9eca902e6
-  */
-  bool tensor_type_represented_as_primitive_type_ptr() const {
-    if (origin->ret_type->is<TensorType>()) {
-      if (origin->is<AllocaStmt>() || origin->is<GlobalTemporaryStmt>()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /* TODO(zhanlue/yi): Unify semantics of offset in PrtOffsetStmt
-
-    There is a hack in PtrOffsetStmt in terms of the semantics of "offset",
+    There is a hack in MatrixPtrStmt in terms of the semantics of "offset",
     where "offset" can be interpreted as "number of bytes" or "index" in
     different upper-level code paths
 
@@ -390,7 +481,7 @@ class PtrOffsetStmt : public Stmt {
     if (origin->is<AllocaStmt>() || origin->is<GlobalTemporaryStmt>() ||
         origin->is<ExternalPtrStmt>()) {
       TI_ASSERT_INFO(origin->ret_type.ptr_removed()->is<TensorType>(),
-                     "PtrOffsetStmt can only be used for TensorType.");
+                     "MatrixPtrStmt can only be used for TensorType.");
       return true;
     }
     return false;
@@ -414,7 +505,7 @@ class PtrOffsetStmt : public Stmt {
 /**
  * An operation to a SNode (not necessarily a leaf SNode).
  */
-class SNodeOpStmt : public Stmt {
+class SNodeOpStmt : public Stmt, public ir_traits::Store {
  public:
   SNodeOpType op_type;
   SNode *snode;
@@ -430,11 +521,26 @@ class SNodeOpStmt : public Stmt {
 
   static bool need_activation(SNodeOpType op);
 
+  // IR Trait: Store
+  stmt_refs get_store_destination() const override {
+    if (op_type == SNodeOpType::allocate) {
+      return std::vector<Stmt *>{val, ptr};
+    } else {
+      return nullptr;
+    }
+  }
+
+  Stmt *get_store_data() const override {
+    return nullptr;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, op_type, snode, ptr, val);
   TI_DEFINE_ACCEPT_AND_CLONE
 };
 
 // TODO: remove this
+// (penguinliong) This Stmt is used for both ND-arrays and textures. This is
+// subject to change in the future.
 class ExternalTensorShapeAlongAxisStmt : public Stmt {
  public:
   int axis;
@@ -476,7 +582,9 @@ class AssertStmt : public Stmt {
 /**
  * Call an external (C++) function.
  */
-class ExternalFuncCallStmt : public Stmt {
+class ExternalFuncCallStmt : public Stmt,
+                             public ir_traits::Store,
+                             public ir_traits::Load {
  public:
   enum Type { SHARED_OBJECT = 0, ASSEMBLY = 1, BITCODE = 2 };
 
@@ -503,6 +611,24 @@ class ExternalFuncCallStmt : public Stmt {
         arg_stmts(arg_stmts),
         output_stmts(output_stmts) {
     TI_STMT_REG_FIELDS;
+  }
+
+  // IR Trait: Store
+  stmt_refs get_store_destination() const override {
+    if (type == ExternalFuncCallStmt::BITCODE) {
+      return arg_stmts;
+    } else {
+      return output_stmts;
+    }
+  }
+
+  Stmt *get_store_data() const override {
+    return nullptr;
+  }
+
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return arg_stmts;
   }
 
   TI_STMT_DEF_FIELDS(type,
@@ -571,7 +697,7 @@ class LoopUniqueStmt : public Stmt {
  * A load from a global address, including SNodes, external arrays, TLS, BLS,
  * and global temporary variables.
  */
-class GlobalLoadStmt : public Stmt {
+class GlobalLoadStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *src;
 
@@ -587,6 +713,11 @@ class GlobalLoadStmt : public Stmt {
     return false;
   }
 
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return src;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, src);
   TI_DEFINE_ACCEPT_AND_CLONE;
 };
@@ -595,7 +726,7 @@ class GlobalLoadStmt : public Stmt {
  * A store to a global address, including SNodes, external arrays, TLS, BLS,
  * and global temporary variables.
  */
-class GlobalStoreStmt : public Stmt {
+class GlobalStoreStmt : public Stmt, public ir_traits::Store {
  public:
   Stmt *dest;
   Stmt *val;
@@ -608,6 +739,15 @@ class GlobalStoreStmt : public Stmt {
     return false;
   }
 
+  // IR Trait: Store
+  stmt_refs get_store_destination() const override {
+    return dest;
+  }
+
+  Stmt *get_store_data() const override {
+    return val;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, dest, val);
   TI_DEFINE_ACCEPT_AND_CLONE;
 };
@@ -615,7 +755,7 @@ class GlobalStoreStmt : public Stmt {
 /**
  * A load from a local variable, i.e., an "alloca".
  */
-class LocalLoadStmt : public Stmt {
+class LocalLoadStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *src;
 
@@ -631,6 +771,11 @@ class LocalLoadStmt : public Stmt {
     return false;
   }
 
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return src;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, src);
   TI_DEFINE_ACCEPT_AND_CLONE;
 };
@@ -638,15 +783,14 @@ class LocalLoadStmt : public Stmt {
 /**
  * A store to a local variable, i.e., an "alloca".
  */
-class LocalStoreStmt : public Stmt {
+class LocalStoreStmt : public Stmt, public ir_traits::Store {
  public:
   Stmt *dest;
   Stmt *val;
 
   LocalStoreStmt(Stmt *dest, Stmt *val) : dest(dest), val(val) {
-    TI_ASSERT(dest->is<AllocaStmt>() ||
-              (dest->is<PtrOffsetStmt>() &&
-               dest->cast<PtrOffsetStmt>()->offset_used_as_index()));
+    TI_ASSERT(dest->is<AllocaStmt>() || dest->is<MatrixPtrStmt>() ||
+              dest->is<MatrixOfMatrixPtrStmt>());
     TI_STMT_REG_FIELDS;
   }
 
@@ -660,6 +804,15 @@ class LocalStoreStmt : public Stmt {
 
   bool common_statement_eliminable() const override {
     return false;
+  }
+
+  // IR Trait: Store
+  stmt_refs get_store_destination() const override {
+    return dest;
+  }
+
+  Stmt *get_store_data() const override {
+    return val;
   }
 
   TI_STMT_DEF_FIELDS(ret_type, dest, val);
@@ -701,18 +854,19 @@ class PrintStmt : public Stmt {
   using EntryType = std::variant<Stmt *, std::string>;
   std::vector<EntryType> contents;
 
-  PrintStmt(const std::vector<EntryType> &contents_) : contents(contents_) {
+  explicit PrintStmt(const std::vector<EntryType> &contents_)
+      : contents(contents_) {
     TI_STMT_REG_FIELDS;
   }
 
   template <typename... Args>
-  PrintStmt(Stmt *t, Args &&...args)
+  explicit PrintStmt(Stmt *t, Args &&...args)
       : contents(make_entries(t, std::forward<Args>(args)...)) {
     TI_STMT_REG_FIELDS;
   }
 
   template <typename... Args>
-  PrintStmt(const std::string &str, Args &&...args)
+  explicit PrintStmt(const std::string &str, Args &&...args)
       : contents(make_entries(str, std::forward<Args>(args)...)) {
     TI_STMT_REG_FIELDS;
   }
@@ -906,12 +1060,12 @@ class FuncCallStmt : public Stmt {
 /**
  * A reference to a variable.
  */
-class ReferenceStmt : public Stmt {
+class ReferenceStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *var;
   bool global_side_effect{false};
 
-  ReferenceStmt(Stmt *var) : var(var) {
+  explicit ReferenceStmt(Stmt *var) : var(var) {
     TI_STMT_REG_FIELDS;
   }
 
@@ -919,7 +1073,28 @@ class ReferenceStmt : public Stmt {
     return global_side_effect;
   }
 
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return var;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, var);
+  TI_DEFINE_ACCEPT_AND_CLONE
+};
+
+/**
+ * Gets an element from a struct
+ */
+class GetElementStmt : public Stmt {
+ public:
+  Stmt *src;
+  std::vector<int> index;
+  GetElementStmt(Stmt *src, const std::vector<int> &index)
+      : src(src), index(index) {
+    TI_STMT_REG_FIELDS;
+  }
+
+  TI_STMT_DEF_FIELDS(ret_type, src, index);
   TI_DEFINE_ACCEPT_AND_CLONE
 };
 
@@ -1022,35 +1197,11 @@ class LinearizeStmt : public Stmt {
 };
 
 /**
- * Extract an interval of bits from an integral value.
- * Equivalent to (|input| >> |bit_begin|) &
- *   ((1 << (|bit_end| - |bit_begin|)) - 1).
- */
-class BitExtractStmt : public Stmt {
- public:
-  Stmt *input;
-  int bit_begin, bit_end;
-  bool simplified;
-  BitExtractStmt(Stmt *input, int bit_begin, int bit_end)
-      : input(input), bit_begin(bit_begin), bit_end(bit_end) {
-    simplified = false;
-    TI_STMT_REG_FIELDS;
-  }
-
-  bool has_global_side_effect() const override {
-    return false;
-  }
-
-  TI_STMT_DEF_FIELDS(ret_type, input, bit_begin, bit_end, simplified);
-  TI_DEFINE_ACCEPT_AND_CLONE
-};
-
-/**
  * The SNode root.
  */
 class GetRootStmt : public Stmt {
  public:
-  GetRootStmt(SNode *root = nullptr) : root_(root) {
+  explicit GetRootStmt(SNode *root = nullptr) : root_(root) {
     if (this->root_ != nullptr) {
       while (this->root_->parent) {
         this->root_ = this->root_->parent;
@@ -1122,6 +1273,10 @@ class GetChStmt : public Stmt {
   bool is_bit_vectorized;
 
   GetChStmt(Stmt *input_ptr, int chid, bool is_bit_vectorized = false);
+  GetChStmt(Stmt *input_ptr,
+            SNode *snode,
+            int chid,
+            bool is_bit_vectorized = false);
 
   bool has_global_side_effect() const override {
     return false;
@@ -1193,7 +1348,8 @@ class OffloadedStmt : public Stmt {
   static std::string task_type_name(TaskType tt);
 
   bool has_body() const {
-    return task_type != TaskType::listgen && task_type != TaskType::gc;
+    return task_type != TaskType::listgen && task_type != TaskType::gc &&
+           task_type != TaskType::gc_rc;
   }
 
   bool is_container_statement() const override {
@@ -1259,9 +1415,6 @@ class LoopIndexStmt : public Stmt {
   bool has_global_side_effect() const override {
     return false;
   }
-
-  // Return the number of bits of the loop, or -1 if unknown.
-  int max_num_bits() const;
 
   TI_STMT_DEF_FIELDS(ret_type, loop, index);
   TI_DEFINE_ACCEPT_AND_CLONE
@@ -1538,7 +1691,7 @@ class AdStackAllocaStmt : public Stmt {
 /**
  * Load the top primal value of an AD-stack.
  */
-class AdStackLoadTopStmt : public Stmt {
+class AdStackLoadTopStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *stack;
 
@@ -1556,6 +1709,11 @@ class AdStackLoadTopStmt : public Stmt {
     return false;
   }
 
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return stack;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, stack);
   TI_DEFINE_ACCEPT_AND_CLONE
 };
@@ -1563,7 +1721,7 @@ class AdStackLoadTopStmt : public Stmt {
 /**
  * Load the top adjoint value of an AD-stack.
  */
-class AdStackLoadTopAdjStmt : public Stmt {
+class AdStackLoadTopAdjStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *stack;
 
@@ -1581,6 +1739,11 @@ class AdStackLoadTopAdjStmt : public Stmt {
     return false;
   }
 
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return stack;
+  }
+
   TI_STMT_DEF_FIELDS(ret_type, stack);
   TI_DEFINE_ACCEPT_AND_CLONE
 };
@@ -1588,7 +1751,7 @@ class AdStackLoadTopAdjStmt : public Stmt {
 /**
  * Pop the top primal and adjoint values in the AD-stack.
  */
-class AdStackPopStmt : public Stmt {
+class AdStackPopStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *stack;
 
@@ -1596,6 +1759,12 @@ class AdStackPopStmt : public Stmt {
     TI_ASSERT(stack->is<AdStackAllocaStmt>());
     this->stack = stack;
     TI_STMT_REG_FIELDS;
+  }
+
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    // This is to make dead store elimination not eliminate consequent pops.
+    return stack;
   }
 
   // Mark has_global_side_effect == true to prevent being moved out of an if
@@ -1609,7 +1778,7 @@ class AdStackPopStmt : public Stmt {
  * Push a primal value to the AD-stack, and set the corresponding adjoint
  * value to 0.
  */
-class AdStackPushStmt : public Stmt {
+class AdStackPushStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *stack;
   Stmt *v;
@@ -1621,6 +1790,12 @@ class AdStackPushStmt : public Stmt {
     TI_STMT_REG_FIELDS;
   }
 
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    // This is to make dead store elimination not eliminate consequent pushes.
+    return stack;
+  }
+
   // Mark has_global_side_effect == true to prevent being moved out of an if
   // clause in the simplify pass for now.
 
@@ -1630,8 +1805,9 @@ class AdStackPushStmt : public Stmt {
 
 /**
  * Accumulate |v| to the top adjoint value of the AD-stack.
+ * This statement loads and stores the adjoint data.
  */
-class AdStackAccAdjointStmt : public Stmt {
+class AdStackAccAdjointStmt : public Stmt, public ir_traits::Load {
  public:
   Stmt *stack;
   Stmt *v;
@@ -1641,6 +1817,11 @@ class AdStackAccAdjointStmt : public Stmt {
     this->stack = stack;
     this->v = v;
     TI_STMT_REG_FIELDS;
+  }
+
+  // IR Trait: Load
+  stmt_refs get_load_pointers() const override {
+    return stack;
   }
 
   // Mark has_global_side_effect == true to prevent being moved out of an if
@@ -1792,13 +1973,16 @@ class MatrixInitStmt : public Stmt {
  public:
   std::vector<Stmt *> values;
 
-  MatrixInitStmt(const std::vector<Stmt *> &values) : values(values) {
+  explicit MatrixInitStmt(const std::vector<Stmt *> &values) : values(values) {
     TI_STMT_REG_FIELDS;
+  }
+
+  bool has_global_side_effect() const override {
+    return false;
   }
 
   TI_STMT_DEF_FIELDS(ret_type, values);
   TI_DEFINE_ACCEPT_AND_CLONE
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

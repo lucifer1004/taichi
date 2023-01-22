@@ -6,8 +6,7 @@
 #include "taichi/runtime/gfx/runtime.h"
 #include "taichi/aot/graph_data.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace gfx {
 namespace {
 class FieldImpl : public aot::Field {
@@ -24,34 +23,61 @@ class FieldImpl : public aot::Field {
 class AotModuleImpl : public aot::Module {
  public:
   explicit AotModuleImpl(const AotModuleParams &params, Arch device_api_backend)
-      : runtime_(params.runtime), device_api_backend_(device_api_backend) {
-    const std::string bin_path =
-        fmt::format("{}/metadata.tcb", params.module_path);
-    if (!read_from_binary_file(ti_aot_data_, bin_path)) {
+      : module_path_(params.module_path),
+        runtime_(params.runtime),
+        device_api_backend_(device_api_backend) {
+    std::unique_ptr<io::VirtualDir> dir_alt =
+        io::VirtualDir::from_fs_dir(module_path_);
+    const io::VirtualDir *dir =
+        params.dir == nullptr ? dir_alt.get() : params.dir;
+
+    bool succ = true;
+
+    std::vector<uint8_t> metadata_json{};
+    succ = dir->load_file("metadata.json", metadata_json) != 0;
+
+    if (!succ) {
       mark_corrupted();
+      TI_WARN("'metadata.json' cannot be read");
       return;
     }
+    auto json = liong::json::parse(
+        (const char *)metadata_json.data(),
+        (const char *)(metadata_json.data() + metadata_json.size()));
+    liong::json::deserialize(json, ti_aot_data_);
 
-    for (int i = 0; i < ti_aot_data_.kernels.size(); ++i) {
-      auto k = ti_aot_data_.kernels[i];
+    if (!params.enable_lazy_loading) {
+      for (int i = 0; i < ti_aot_data_.kernels.size(); ++i) {
+        auto k = ti_aot_data_.kernels[i];
+        std::vector<std::vector<uint32_t>> spirv_sources_codes;
+        for (int j = 0; j < k.tasks_attribs.size(); ++j) {
+          std::string spirv_path = k.tasks_attribs[j].name + ".spv";
 
-      std::vector<std::vector<uint32_t>> spirv_sources_codes;
-      for (int j = 0; j < k.tasks_attribs.size(); ++j) {
-        std::vector<uint32_t> res =
-            read_spv_file(params.module_path, k.tasks_attribs[j]);
-        if (res.size() == 0) {
-          mark_corrupted();
-          return;
+          std::vector<uint32_t> spirv;
+          dir->load_file(spirv_path, spirv);
+
+          if (spirv.size() == 0) {
+            mark_corrupted();
+            TI_WARN("spirv '{}' cannot be read", spirv_path);
+            return;
+          }
+          if (spirv.at(0) != 0x07230203) {
+            TI_WARN("spirv '{}' has a incorrect magic number {}", spirv_path,
+                    spirv.at(0));
+          }
+          spirv_sources_codes.emplace_back(std::move(spirv));
         }
-        spirv_sources_codes.push_back(res);
+        ti_aot_data_.spirv_codes.emplace_back(std::move(spirv_sources_codes));
       }
-      ti_aot_data_.spirv_codes.push_back(spirv_sources_codes);
     }
 
-    const std::string graph_path =
-        fmt::format("{}/graphs.tcb", params.module_path);
-    if (!read_from_binary_file(graphs_, graph_path)) {
+    std::vector<uint8_t> graphs_tcb{};
+    succ = dir->load_file("graphs.tcb", graphs_tcb) &&
+           read_from_binary(graphs_, graphs_tcb.data(), graphs_tcb.size());
+
+    if (!succ) {
       mark_corrupted();
+      TI_WARN("'graphs.tcb' cannot be read");
       return;
     }
   }
@@ -104,6 +130,9 @@ class AotModuleImpl : public aot::Module {
       // AOT, only use the name of the function which should be the first part
       // of the struct
       if (ti_aot_data_.kernels[i].name.rfind(name, 0) == 0) {
+        if (!try_load_spv_kernel(i)) {
+          return false;
+        }
         kernel.kernel_attribs = ti_aot_data_.kernels[i];
         kernel.task_spirv_source_codes = ti_aot_data_.spirv_codes[i];
         // We don't have to store the number of SNodeTree in |ti_aot_data_| yet,
@@ -141,19 +170,40 @@ class AotModuleImpl : public aot::Module {
     return std::make_unique<FieldImpl>(runtime_, field);
   }
 
-  std::vector<uint32_t> read_spv_file(const std::string &output_dir,
-                                      const TaskAttributes &k) {
+  bool try_load_spv_kernel(std::size_t index) {
+    if (index >= ti_aot_data_.spirv_codes.size() ||
+        ti_aot_data_.spirv_codes[index].empty()) {
+      ti_aot_data_.spirv_codes.resize(index + 1);
+      auto &codes = ti_aot_data_.spirv_codes[index];
+      const auto &k = ti_aot_data_.kernels[index];
+      for (const auto &t : k.tasks_attribs) {
+        auto spv = read_spv_file(module_path_, t);
+        if (spv.empty()) {
+          mark_corrupted();
+          return false;
+        }
+        codes.push_back(spv);
+      }
+    }
+    return true;
+  }
+
+  static std::vector<uint32_t> read_spv_file(const std::string &output_dir,
+                                             const TaskAttributes &k) {
     const std::string spv_path = fmt::format("{}/{}.spv", output_dir, k.name);
     std::vector<uint32_t> source_code;
     std::ifstream fs(spv_path, std::ios_base::binary | std::ios::ate);
-    size_t size = fs.tellg();
-    fs.seekg(0, std::ios::beg);
-    source_code.resize(size / sizeof(uint32_t));
-    fs.read((char *)source_code.data(), size);
-    fs.close();
+    if (fs.is_open()) {
+      size_t size = fs.tellg();
+      fs.seekg(0, std::ios::beg);
+      source_code.resize(size / sizeof(uint32_t));
+      fs.read((char *)source_code.data(), size);
+      fs.close();
+    }
     return source_code;
   }
 
+  std::string module_path_;
   TaichiAotData ti_aot_data_;
   GfxRuntime *runtime_{nullptr};
   Arch device_api_backend_;
@@ -168,5 +218,4 @@ std::unique_ptr<aot::Module> make_aot_module(std::any mod_params,
 }
 
 }  // namespace gfx
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

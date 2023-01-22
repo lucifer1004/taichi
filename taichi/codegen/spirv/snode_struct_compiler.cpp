@@ -1,7 +1,6 @@
 #include "taichi/codegen/spirv/snode_struct_compiler.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace spirv {
 namespace {
 
@@ -95,6 +94,7 @@ class StructCompiler {
         cell_stride += snode_size;
         snode_descriptors_.find(ch_snode->id)
             ->second.mem_offset_in_parent_cell = child_offset;
+        ch_snode->offset_bytes_in_parent_cell = child_offset;
       }
       sn_desc.cell_stride = cell_stride;
 
@@ -174,5 +174,4 @@ CompiledSNodeStructs compile_snode_structs(SNode &root) {
 }
 
 }  // namespace spirv
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

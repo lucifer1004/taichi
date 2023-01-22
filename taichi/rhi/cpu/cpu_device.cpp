@@ -1,7 +1,6 @@
 #include "taichi/rhi/cpu/cpu_device.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 namespace cpu {
 
@@ -29,17 +28,7 @@ DeviceAllocation CpuDevice::allocate_memory(const AllocParams &params) {
 
 DeviceAllocation CpuDevice::allocate_memory_runtime(
     const LlvmRuntimeAllocParams &params) {
-  AllocInfo info;
-  info.ptr = allocate_llvm_runtime_memory_jit(params);
-  // TODO: Add caching allocator
-  info.size = params.size;
-  info.use_cached = params.use_cached;
-  DeviceAllocation alloc;
-  alloc.alloc_id = allocations_.size();
-  alloc.device = this;
-
-  allocations_.push_back(info);
-  return alloc;
+  return allocate_memory(params);
 }
 
 void CpuDevice::dealloc_memory(DeviceAllocation handle) {
@@ -55,9 +44,24 @@ void CpuDevice::dealloc_memory(DeviceAllocation handle) {
   }
 }
 
-void *CpuDevice::map(DeviceAllocation alloc) {
+RhiResult CpuDevice::map_range(DevicePtr ptr,
+                               uint64_t size,
+                               void **mapped_ptr) {
+  AllocInfo &info = allocations_[ptr.alloc_id];
+  if (info.ptr == nullptr) {
+    return RhiResult::error;
+  }
+  *mapped_ptr = (uint8_t *)info.ptr + ptr.offset;
+  return RhiResult::success;
+}
+
+RhiResult CpuDevice::map(DeviceAllocation alloc, void **mapped_ptr) {
   AllocInfo &info = allocations_[alloc.alloc_id];
-  return info.ptr;
+  if (info.ptr == nullptr) {
+    return RhiResult::error;
+  }
+  *mapped_ptr = info.ptr;
+  return RhiResult::success;
 }
 
 void CpuDevice::unmap(DeviceAllocation alloc) {
@@ -91,5 +95,4 @@ uint64 CpuDevice::fetch_result_uint64(int i, uint64 *result_buffer) {
 }
 
 }  // namespace cpu
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

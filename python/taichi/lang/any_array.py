@@ -17,7 +17,7 @@ class AnyArray:
     def __init__(self, ptr):
         assert ptr.is_external_tensor_expr()
         self.ptr = ptr
-        self.ptr.type_check(impl.get_runtime().prog.config)
+        self.ptr.type_check(impl.get_runtime().prog.config())
 
     def element_shape(self):
         return _ti_core.get_external_tensor_element_shape(self.ptr)
@@ -33,8 +33,14 @@ class AnyArray:
     def get_type(self):
         return NdarrayTypeMetadata(
             self.ptr.get_ret_type(),
-            None,  # AnyArray can take any shape
-            self.layout())
+            None  # AnyArray can take any shape
+        )
+
+    @property
+    @taichi_scope
+    def grad(self):
+        """Returns the gradient of this array."""
+        return AnyArray(_ti_core.make_external_grad_tensor_expr(self.ptr))
 
     @property
     @taichi_scope
@@ -78,6 +84,8 @@ class AnyArrayAccess:
 
     @taichi_scope
     def subscript(self, i, j):
+        ast_builder = impl.get_runtime().compiling_callable.ast_builder()
+
         indices_second = (i, ) if len(self.arr.element_shape()) == 1 else (i,
                                                                            j)
         if self.arr.layout() == Layout.SOA:
@@ -85,8 +93,9 @@ class AnyArrayAccess:
         else:
             indices = self.indices_first + indices_second
         return Expr(
-            _ti_core.subscript(self.arr.ptr, make_expr_group(*indices),
-                               impl.get_runtime().get_current_src_info()))
+            ast_builder.expr_subscript(
+                self.arr.ptr, make_expr_group(*indices),
+                impl.get_runtime().get_current_src_info()))
 
 
 __all__ = []

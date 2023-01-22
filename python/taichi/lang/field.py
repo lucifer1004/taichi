@@ -1,5 +1,7 @@
 import taichi.lang
 from taichi._lib import core as _ti_core
+from taichi._logging import warn
+from taichi.lang import impl
 from taichi.lang.exception import TaichiSyntaxError
 from taichi.lang.util import (in_python_scope, python_scope, to_numpy_type,
                               to_paddle_type, to_pytorch_type)
@@ -166,6 +168,10 @@ class Field:
         raise NotImplementedError()
 
     @python_scope
+    def _from_external_arr(self, arr):
+        raise NotImplementedError()
+
+    @python_scope
     def from_torch(self, arr):
         """Loads all elements from a torch tensor.
 
@@ -174,7 +180,7 @@ class Field:
         Args:
             arr (torch.tensor): The source torch tensor.
         """
-        self.from_numpy(arr.contiguous())
+        self._from_external_arr(arr.contiguous())
 
     @python_scope
     def from_paddle(self, arr):
@@ -284,6 +290,10 @@ class ScalarField(Field):
     def to_numpy(self, dtype=None):
         """Converts this field to a `numpy.ndarray`.
         """
+        if self.parent()._snode.ptr.type == _ti_core.SNodeType.dynamic:
+            warn(
+                "You are trying to convert a dynamic snode to a numpy array, be aware that inactive items in the snode will be converted to zeros in the resulting array."
+            )
         if dtype is None:
             dtype = to_numpy_type(self.dtype)
         import numpy as np  # pylint: disable=C0415
@@ -325,9 +335,7 @@ class ScalarField(Field):
         return arr
 
     @python_scope
-    def from_numpy(self, arr):
-        """Copies the data from a `numpy.ndarray` into this field.
-        """
+    def _from_external_arr(self, arr):
         if len(self.shape) != len(arr.shape):
             raise ValueError(f"ti.field shape {self.shape} does not match"
                              f" the numpy array shape {arr.shape}")
@@ -335,11 +343,18 @@ class ScalarField(Field):
             if self.shape[i] != arr.shape[i]:
                 raise ValueError(f"ti.field shape {self.shape} does not match"
                                  f" the numpy array shape {arr.shape}")
-        if hasattr(arr, 'contiguous'):
-            arr = arr.contiguous()
         from taichi._kernels import ext_arr_to_tensor  # pylint: disable=C0415
         ext_arr_to_tensor(arr, self)
         taichi.lang.runtime_ops.sync()
+
+    @python_scope
+    def from_numpy(self, arr):
+        """Copies the data from a `numpy.ndarray` into this field.
+        """
+        if not arr.flags.c_contiguous:
+            import numpy as np  # pylint: disable=C0415
+            arr = np.ascontiguousarray(arr)
+        self._from_external_arr(arr)
 
     @python_scope
     def __setitem__(self, key, value):
@@ -377,6 +392,15 @@ class SNodeHostAccessor:
             def setter(value, *key):
                 assert len(key) == _ti_core.get_max_num_indices()
                 snode.write_float(key, value)
+                # we only capture write kernels in tape scope with no grad_repaced
+                if impl.get_runtime().target_tape and impl.get_runtime(
+                ).target_tape.grad_checker and not impl.get_runtime(
+                ).grad_replaced:
+                    for x in impl.get_runtime(
+                    ).target_tape.grad_checker.to_check:
+                        assert snode != x.snode.ptr, "Overwritten is prohibitive when doing grad check."
+                    impl.get_runtime().target_tape.insert(
+                        snode.write_float, (key, value))
         else:
             if _ti_core.is_signed(snode.data_type()):
 
@@ -392,6 +416,15 @@ class SNodeHostAccessor:
             def setter(value, *key):
                 assert len(key) == _ti_core.get_max_num_indices()
                 snode.write_int(key, value)
+                # same as above
+                if impl.get_runtime().target_tape and impl.get_runtime(
+                ).target_tape.grad_checker and not impl.get_runtime(
+                ).grad_replaced:
+                    for x in impl.get_runtime(
+                    ).target_tape.grad_checker.to_check:
+                        assert snode != x.snode.ptr, "Overwritten is prohibitive when doing grad check."
+                    impl.get_runtime().target_tape.insert(
+                        snode.write_int, (key, value))
 
         self.getter = getter
         self.setter = setter

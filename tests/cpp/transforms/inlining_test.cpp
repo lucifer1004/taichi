@@ -6,8 +6,7 @@
 #include "taichi/ir/transforms.h"
 #include "taichi/program/program.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class InliningTest : public ::testing::Test {
  protected:
@@ -34,7 +33,7 @@ TEST_F(InliningTest, ArgLoadOfArgLoad) {
 
   auto *func = prog_->create_function(
       FunctionKey("test_func", /*func_id=*/0, /*instance_id=*/0));
-  func->insert_scalar_arg(get_data_type<int>());
+  func->insert_scalar_param(get_data_type<int>());
   func->insert_ret(get_data_type<int>());
   func->set_function_body(std::move(func_body));
 
@@ -58,5 +57,4 @@ TEST_F(InliningTest, ArgLoadOfArgLoad) {
   EXPECT_TRUE(irpass::analysis::same_statements(func_block, kernel_block));
 }
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

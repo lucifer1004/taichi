@@ -1,16 +1,18 @@
 #pragma once
 
+#include "taichi/cache/gfx/cache_manager.h"
 #include "taichi/runtime/gfx/runtime.h"
 #include "taichi/runtime/gfx/snode_tree_manager.h"
 #include "taichi/program/program_impl.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class OpenglProgramImpl : public ProgramImpl {
  public:
-  OpenglProgramImpl(CompileConfig &config);
-  FunctionType compile(Kernel *kernel, OffloadedStmt *offloaded) override;
+  explicit OpenglProgramImpl(CompileConfig &config);
+  ~OpenglProgramImpl() override;
+  FunctionType compile(const CompileConfig &compile_config,
+                       Kernel *kernel) override;
 
   std::size_t get_snode_num_dynamically_allocated(
       SNode *snode,
@@ -30,11 +32,14 @@ class OpenglProgramImpl : public ProgramImpl {
     runtime_->synchronize();
   }
 
+  void finalize() override;
+
   StreamSemaphore flush() override {
     return runtime_->flush();
   }
 
-  std::unique_ptr<AotModuleBuilder> make_aot_module_builder() override;
+  std::unique_ptr<AotModuleBuilder> make_aot_module_builder(
+      const DeviceCapabilityConfig &caps) override;
 
   void destroy_snode_tree(SNodeTree *snode_tree) override {
     TI_ASSERT(snode_tree_mgr_ != nullptr);
@@ -43,6 +48,11 @@ class OpenglProgramImpl : public ProgramImpl {
 
   DeviceAllocation allocate_memory_ndarray(std::size_t alloc_size,
                                            uint64 *result_buffer) override;
+
+  bool used_in_kernel(DeviceAllocationId id) override {
+    return runtime_->used_in_kernel(id);
+  }
+
   DeviceAllocation allocate_texture(const ImageParams &params) override;
 
   Device *get_compute_device() override {
@@ -61,14 +71,16 @@ class OpenglProgramImpl : public ProgramImpl {
     return snode_tree_mgr_->get_snode_tree_device_ptr(tree_id);
   }
 
-  std::unique_ptr<aot::Kernel> make_aot_kernel(Kernel &kernel) override;
+  void dump_cache_data_to_disk() override;
+
+  const std::unique_ptr<gfx::CacheManager> &get_cache_manager();
 
  private:
   std::shared_ptr<Device> device_{nullptr};
   std::unique_ptr<gfx::GfxRuntime> runtime_{nullptr};
   std::unique_ptr<gfx::SNodeTreeManager> snode_tree_mgr_{nullptr};
   std::vector<spirv::CompiledSNodeStructs> aot_compiled_snode_structs_;
+  std::unique_ptr<gfx::CacheManager> cache_manager_{nullptr};
 };
 
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

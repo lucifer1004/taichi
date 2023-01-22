@@ -11,16 +11,20 @@
 #include "taichi/transforms/constant_fold.h"
 #include "taichi/program/program.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 class ConstantFold : public BasicStmtVisitor {
  public:
   using BasicStmtVisitor::visit;
   DelayedIRModifier modifier;
   Program *program;
+  CompileConfig compile_config;
 
-  explicit ConstantFold(Program *program)
-      : BasicStmtVisitor(), program(program) {
+  explicit ConstantFold(Program *program, const CompileConfig &compile_config)
+      : program(program), compile_config(compile_config) {
+    this->compile_config.advanced_optimization = false;
+    this->compile_config.constant_folding = false;
+    this->compile_config.external_optimization_level = 0;
   }
 
   Kernel *get_jit_evaluator_kernel(JITEvaluatorId const &id) {
@@ -33,7 +37,7 @@ class ConstantFold : public BasicStmtVisitor {
       return it->second.get();
 
     auto kernel_name = fmt::format("jit_evaluator_{}", cache.size());
-    auto func = [&id, this]() {
+    auto func = [&id](Kernel *kernel) {
       auto lhstmt =
           Stmt::make<ArgLoadStmt>(/*arg_id=*/0, id.lhs, /*is_ptr=*/false);
       auto rhstmt =
@@ -42,25 +46,28 @@ class ConstantFold : public BasicStmtVisitor {
       if (id.is_binary) {
         oper = Stmt::make<BinaryOpStmt>(id.binary_op(), lhstmt.get(),
                                         rhstmt.get());
+        oper->set_tb(id.tb);
       } else {
         oper = Stmt::make<UnaryOpStmt>(id.unary_op(), lhstmt.get());
         if (unary_op_is_cast(id.unary_op())) {
           oper->cast<UnaryOpStmt>()->cast_type = id.rhs;
         }
       }
+      auto &ast_builder = kernel->context->builder();
       auto ret = Stmt::make<ReturnStmt>(oper.get());
-      program->current_ast_builder()->insert(std::move(lhstmt));
-      if (id.is_binary)
-        program->current_ast_builder()->insert(std::move(rhstmt));
-      program->current_ast_builder()->insert(std::move(oper));
-      program->current_ast_builder()->insert(std::move(ret));
+      ast_builder.insert(std::move(lhstmt));
+      if (id.is_binary) {
+        ast_builder.insert(std::move(rhstmt));
+      }
+      ast_builder.insert(std::move(oper));
+      ast_builder.insert(std::move(ret));
     };
 
     auto ker = std::make_unique<Kernel>(*program, func, kernel_name);
     ker->insert_ret(id.ret);
-    ker->insert_scalar_arg(id.lhs);
+    ker->insert_scalar_param(id.lhs);
     if (id.is_binary)
-      ker->insert_scalar_arg(id.rhs);
+      ker->insert_scalar_param(id.rhs);
     ker->is_evaluator = true;
 
     auto *ker_ptr = ker.get();
@@ -97,6 +104,7 @@ class ConstantFold : public BasicStmtVisitor {
                       ret.dt,
                       lhs.dt,
                       rhs.dt,
+                      compile_config.debug ? stmt->tb : "",
                       true};
     auto *ker = get_jit_evaluator_kernel(id);
     auto launch_ctx = ker->make_launch_context();
@@ -104,7 +112,7 @@ class ConstantFold : public BasicStmtVisitor {
     launch_ctx.set_arg_raw(1, rhs.val_u64);
     {
       std::lock_guard<std::mutex> _(program->jit_evaluator_cache_mut);
-      (*ker)(launch_ctx);
+      (*ker)(compile_config, launch_ctx);
       ret.val_i64 = program->fetch_result<int64_t>(0);
     }
     return true;
@@ -120,13 +128,14 @@ class ConstantFold : public BasicStmtVisitor {
                       ret.dt,
                       operand.dt,
                       stmt->cast_type,
+                      "",
                       false};
     auto *ker = get_jit_evaluator_kernel(id);
     auto launch_ctx = ker->make_launch_context();
     launch_ctx.set_arg_raw(0, operand.val_u64);
     {
       std::lock_guard<std::mutex> _(program->jit_evaluator_cache_mut);
-      (*ker)(launch_ctx);
+      (*ker)(compile_config, launch_ctx);
       ret.val_i64 = program->fetch_result<int64_t>(0);
     }
     return true;
@@ -144,7 +153,7 @@ class ConstantFold : public BasicStmtVisitor {
       if (is_integral(rhs->ret_type)) {
         auto rhs_val = rhs->val.val_int();
         if (rhs_val < 0 && is_integral(stmt->ret_type)) {
-          TI_ERROR("negative exponent in integer pow is not allowed.");
+          TI_ERROR("Negative exponent in pow(int, int) is not allowed.");
         }
       }
     }
@@ -199,33 +208,11 @@ class ConstantFold : public BasicStmtVisitor {
     }
   }
 
-  void visit(BitExtractStmt *stmt) override {
-    auto input = stmt->input->cast<ConstStmt>();
-    if (!input)
-      return;
-    std::unique_ptr<Stmt> result_stmt;
-    if (is_signed(input->val.dt)) {
-      auto result = (input->val.val_int() >> stmt->bit_begin) &
-                    ((1LL << (stmt->bit_end - stmt->bit_begin)) - 1);
-      result_stmt = Stmt::make<ConstStmt>(TypedConstant(input->val.dt, result));
-    } else {
-      auto result = (input->val.val_uint() >> stmt->bit_begin) &
-                    ((1LL << (stmt->bit_end - stmt->bit_begin)) - 1);
-      result_stmt = Stmt::make<ConstStmt>(TypedConstant(input->val.dt, result));
-    }
-    stmt->replace_usages_with(result_stmt.get());
-    modifier.insert_before(stmt, std::move(result_stmt));
-    modifier.erase(stmt);
-  }
-
-  static bool run(IRNode *node, Program *program) {
-    ConstantFold folder(program);
+  static bool run(IRNode *node,
+                  Program *program,
+                  const CompileConfig &compile_config) {
+    ConstantFold folder(program, compile_config);
     bool modified = false;
-
-    auto program_compile_config_org = program->config;
-    program->config.advanced_optimization = false;
-    program->config.constant_folding = false;
-    program->config.external_optimization_level = 0;
 
     while (true) {
       node->accept(&folder);
@@ -236,8 +223,6 @@ class ConstantFold : public BasicStmtVisitor {
       }
     }
 
-    program->config = program_compile_config_org;
-
     return modified;
   }
 };
@@ -247,23 +232,14 @@ const PassID ConstantFoldPass::id = "ConstantFoldPass";
 namespace irpass {
 
 bool constant_fold(IRNode *root,
-                   const CompileConfig &config,
+                   const CompileConfig &compile_config,
                    const ConstantFoldPass::Args &args) {
   TI_AUTO_PROF;
-  // @archibate found that `debug=True` will cause JIT kernels
-  // to evaluate incorrectly (always return 0), so we simply
-  // disable constant_fold when config.debug is turned on.
-  // Discussion:
-  // https://github.com/taichi-dev/taichi/pull/839#issuecomment-626107010
-  if (config.debug) {
-    TI_TRACE("config.debug enabled, ignoring constant fold");
+  if (!compile_config.advanced_optimization)
     return false;
-  }
-  if (!config.advanced_optimization)
-    return false;
-  return ConstantFold::run(root, args.program);
+  return ConstantFold::run(root, args.program, compile_config);
 }
 
 }  // namespace irpass
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

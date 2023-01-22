@@ -9,8 +9,8 @@ target_sources(taichi_util
     image_buffer.cpp
     image_io.cpp
     lang_util.cpp
+    offline_cache.cpp
     short_name.cpp
-    statistics.cpp
     str.cpp
     testing.cpp
     zip.cpp

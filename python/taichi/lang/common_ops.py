@@ -2,6 +2,7 @@ import warnings
 
 from taichi.lang import ops
 from taichi.lang.util import in_python_scope
+from taichi.types import primitive_types
 
 
 class TaichiOperations:
@@ -18,7 +19,7 @@ class TaichiOperations:
     def __getattr__(self, item):
         if item in TaichiOperations.__deprecated_atomic_ops__:
             warnings.warn(
-                f"a.{item}(b) is deprecated. Please use ti.{item}(a, b) instead.",
+                f"a.{item}(b) is deprecated, and it will be removed in Taichi v1.6.0. Please use ti.{item}(a, b) instead.",
                 DeprecationWarning)
             return getattr(self,
                            TaichiOperations.__deprecated_atomic_ops__[item])
@@ -242,7 +243,7 @@ class TaichiOperations:
     def __irshift__(self, other):
         if in_python_scope():
             return NotImplemented
-        self._assign(ops.bit_shr(self, other))
+        self._assign(ops.bit_sar(self, other))
         return self
 
     def __ipow__(self, other):
@@ -297,6 +298,10 @@ class TaichiOperations:
 
     def __ti_int__(self):
         return ops.cast(self, int)
+
+    def __ti_bool__(self):
+        return ops.cast(
+            self, primitive_types.i32)  # TODO[Xiaoyan]: Use i1 in the future
 
     def __ti_float__(self):
         return ops.cast(self, float)

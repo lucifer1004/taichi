@@ -8,14 +8,13 @@
 #include <spirv-tools/libspirv.hpp>
 #include <spirv-tools/optimizer.hpp>
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 
 class Kernel;
 
 namespace spirv {
 
-void lower(Kernel *kernel);
+void lower(const CompileConfig &config, Kernel *kernel);
 
 class KernelCodegen {
  public:
@@ -23,7 +22,8 @@ class KernelCodegen {
     std::string ti_kernel_name;
     Kernel *kernel;
     std::vector<CompiledSNodeStructs> compiled_structs;
-    Device *device;
+    Arch arch;
+    DeviceCapabilityConfig caps;
     bool enable_spv_opt{true};
   };
 
@@ -42,5 +42,4 @@ class KernelCodegen {
 };
 
 }  // namespace spirv
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

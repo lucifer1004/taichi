@@ -5,14 +5,16 @@
 #include "taichi/ir/ir.h"
 #include "taichi/ir/expr.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 class ExpressionVisitor;
 
 // always a tree - used as rvalues
 class Expression {
- public:
+ protected:
   Stmt *stmt;
+
+ public:
   std::string tb;
   std::map<std::string, std::string> attributes;
   DataType ret_type;
@@ -39,10 +41,7 @@ class Expression {
     stmt = nullptr;
   }
 
-  virtual void type_check(CompileConfig *config) {
-    // TODO: make it pure virtual after type_check for all expressions are
-    // implemented
-  }
+  virtual void type_check(const CompileConfig *config) = 0;
 
   virtual void accept(ExpressionVisitor *visitor) = 0;
 
@@ -56,6 +55,10 @@ class Expression {
 
   virtual ~Expression() {
   }
+
+  Stmt *get_flattened_stmt() const {
+    return stmt;
+  }
 };
 
 class ExprGroup {
@@ -65,7 +68,7 @@ class ExprGroup {
   ExprGroup() {
   }
 
-  ExprGroup(const Expr &a) {
+  explicit ExprGroup(const Expr &a) {
     exprs.emplace_back(a);
   }
 
@@ -122,8 +125,8 @@ inline ExprGroup operator,(const ExprGroup &a, const Expr &b) {
 
 class ExpressionVisitor {
  public:
-  ExpressionVisitor(bool allow_undefined_visitor = false,
-                    bool invoke_default_visitor = false)
+  explicit ExpressionVisitor(bool allow_undefined_visitor = false,
+                             bool invoke_default_visitor = false)
       : allow_undefined_visitor_(allow_undefined_visitor),
         invoke_default_visitor_(invoke_default_visitor) {
   }
@@ -160,9 +163,7 @@ class ExpressionVisitor {
   bool invoke_default_visitor_{false};
 };
 
-#define TI_DEFINE_ACCEPT_FOR_EXPRESSION              \
-  void accept(ExpressionVisitor *visitor) override { \
-    visitor->visit(this);                            \
-  }
+#define TI_DEFINE_ACCEPT_FOR_EXPRESSION \
+  void accept(ExpressionVisitor *visitor) override { visitor->visit(this); }
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

@@ -8,12 +8,13 @@
 #include "taichi/codegen/llvm/codegen_llvm.h"
 #include "taichi/aot/module_data.h"
 
-TLANG_NAMESPACE_BEGIN
+namespace taichi::lang {
 
 class KernelCodeGenDX12 : public KernelCodeGen {
  public:
-  KernelCodeGenDX12(Kernel *kernel, IRNode *ir = nullptr)
-      : KernelCodeGen(kernel, ir) {
+  explicit KernelCodeGenDX12(const CompileConfig *compile_config,
+                             Kernel *kernel)
+      : KernelCodeGen(compile_config, kernel) {
   }
   struct CompileResult {
     std::vector<std::vector<uint8_t>> task_dxil_source_codes;
@@ -22,11 +23,12 @@ class KernelCodeGenDX12 : public KernelCodeGen {
   };
   CompileResult compile();
 #ifdef TI_WITH_LLVM
-  LLVMCompiledData compile_task(
+  LLVMCompiledTask compile_task(
+      const CompileConfig *config,
       std::unique_ptr<llvm::Module> &&module = nullptr,
       OffloadedStmt *stmt = nullptr) override;
 #endif
   FunctionType compile_to_function() override;
 };
 
-TLANG_NAMESPACE_END
+}  // namespace taichi::lang

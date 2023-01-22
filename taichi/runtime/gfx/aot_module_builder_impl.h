@@ -9,8 +9,7 @@
 #include "taichi/codegen/spirv/snode_struct_compiler.h"
 #include "taichi/codegen/spirv/kernel_utils.h"
 
-namespace taichi {
-namespace lang {
+namespace taichi::lang {
 namespace gfx {
 
 class AotModuleBuilderImpl : public AotModuleBuilder {
@@ -18,7 +17,8 @@ class AotModuleBuilderImpl : public AotModuleBuilder {
   explicit AotModuleBuilderImpl(
       const std::vector<CompiledSNodeStructs> &compiled_structs,
       Arch device_api_backend,
-      std::unique_ptr<Device> &&target_device = nullptr);
+      const CompileConfig &compile_config,
+      const DeviceCapabilityConfig &caps);
 
   void dump(const std::string &output_dir,
             const std::string &filename) const override;
@@ -43,19 +43,17 @@ class AotModuleBuilderImpl : public AotModuleBuilder {
                             const std::string &key,
                             Kernel *kernel) override;
 
-  void add_compiled_kernel(aot::Kernel *kernel) override;
-
   std::string write_spv_file(const std::string &output_dir,
                              const TaskAttributes &k,
                              const std::vector<uint32_t> &source_code) const;
 
   const std::vector<CompiledSNodeStructs> &compiled_structs_;
   TaichiAotData ti_aot_data_;
-  std::unique_ptr<Device> aot_target_device_;
 
   Arch device_api_backend_;
+  const CompileConfig &config_;
+  DeviceCapabilityConfig caps_;
 };
 
 }  // namespace gfx
-}  // namespace lang
-}  // namespace taichi
+}  // namespace taichi::lang

@@ -1,9 +1,9 @@
 option(USE_STDCPP "Use -stdlib=libc++" OFF)
 option(TI_WITH_LLVM "Build with LLVM backends" ON)
-option(TI_LLVM_15 "Switch to LLVM 15" OFF)
 option(TI_WITH_METAL "Build with the Metal backend" ON)
 option(TI_WITH_CUDA "Build with the CUDA backend" ON)
 option(TI_WITH_CUDA_TOOLKIT "Build with the CUDA toolkit" OFF)
+option(TI_WITH_AMDGPU "Build with the AMDGPU backend" OFF)
 option(TI_WITH_OPENGL "Build with the OpenGL backend" ON)
 option(TI_WITH_CC "Build with the C backend" ON)
 option(TI_WITH_VULKAN "Build with the Vulkan backend" OFF)
@@ -23,16 +23,8 @@ set(CMAKE_POLICY_DEFAULT_CMP0063 NEW)
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 set(INSTALL_LIB_DIR ${CMAKE_INSTALL_PREFIX}/python/taichi/_lib)
 
-if(ANDROID)
-    set(TI_WITH_VULKAN ON)
-    set(TI_EXPORT_CORE ON)
-    set(TI_WITH_LLVM OFF)
-    set(TI_WITH_METAL OFF)
-    set(TI_WITH_CUDA OFF)
-    set(TI_WITH_OPENGL OFF)
-    set(TI_WITH_CC OFF)
-    set(TI_WITH_DX11 OFF)
-    set(TI_WITH_DX12 OFF)
+if (TI_WITH_AMDGPU AND TI_WITH_CUDA)
+    message(WARNING "Compiling CUDA and AMDGPU backends simultaneously")
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -54,12 +46,25 @@ if (APPLE)
         set(TI_WITH_CC OFF)
         message(WARNING "C backend not supported on OS X. Setting TI_WITH_CC to OFF.")
     endif()
+    if (TI_WITH_AMDGPU)
+        set(TI_WITH_AMDGPU OFF)
+        message(WARNING "AMDGPU backend not supported on OS X. Setting TI_WITH_AMDGPU to OFF.")
+    endif()
+else()
+    if (TI_WITH_METAL)
+        set(TI_WITH_METAL OFF)
+        message(WARNING "Metal backend only supported on OS X. Setting TI_WITH_METAL to OFF.")
+    endif()
 endif()
 
 if (WIN32)
     if (TI_WITH_CC)
         set(TI_WITH_CC OFF)
         message(WARNING "C backend not supported on Windows. Setting TI_WITH_CC to OFF.")
+    endif()
+    if (TI_WITH_AMDGPU)
+        set(TI_WITH_AMDGPU OFF)
+        message(WARNING "AMDGPU backend not supported on Windows. Setting TI_WITH_AMDGPU to OFF.")
     endif()
 endif()
 
@@ -98,12 +103,6 @@ if(TI_WITH_LLVM)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_WITH_LLVM")
 endif()
 
-if (TI_LLVM_15)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_LLVM_15")
-else()
-    set(TI_WITH_DX12 OFF)
-endif()
-
 ## This version var is only used to locate slim_libdevice.10.bc
 if(NOT CUDA_VERSION)
     set(CUDA_VERSION 10.0)
@@ -113,6 +112,12 @@ if (TI_WITH_CUDA)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_WITH_CUDA")
   file(GLOB TAICHI_CUDA_RUNTIME_SOURCE "taichi/runtime/cuda/runtime.cpp")
   list(APPEND TAICHI_CORE_SOURCE ${TAICHI_CUDA_RUNTIME_SOURCE})
+endif()
+
+if (TI_WITH_AMDGPU)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_WITH_AMDGPU")
+# file(GLOB TAICHI_AMDGPU_RUNTIME_SOURCE "taichi/runtime/amdgpu/runtime.cpp")
+  list(APPEND TAIHI_CORE_SOURCE ${TAICHI_AMDGPU_RUNTIME_SOURCE})
 endif()
 
 if (TI_WITH_DX12)
@@ -125,10 +130,6 @@ if (TI_WITH_CC)
   file(GLOB TAICHI_CC_SOURCE "taichi/codegen/cc/*.h" "taichi/codegen/cc/*.cpp")
   list(APPEND TAICHI_CORE_SOURCE ${TAICHI_CC_SOURCE})
 endif()
-
-# This compiles all the libraries with -fPIC, which is critical to link a static
-# library into a shared lib.
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 set(CORE_LIBRARY_NAME taichi_core)
 add_library(${CORE_LIBRARY_NAME} OBJECT ${TAICHI_CORE_SOURCE})
@@ -226,15 +227,29 @@ if(TI_WITH_LLVM)
         target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE cuda_rhi)
     endif()
 
+    if (TI_WITH_AMDGPU)
+        llvm_map_components_to_libnames(llvm_amdgpu_libs AMDGPU)
+        add_subdirectory(taichi/rhi/amdgpu)
+        add_subdirectory(taichi/codegen/amdgpu)
+        add_subdirectory(taichi/runtime/amdgpu)
+
+        target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE amdgpu_codegen)
+        target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE amdgpu_runtime)
+        target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE amdgpu_rhi)
+    endif()
+
     if (TI_WITH_DX12)
         llvm_map_components_to_libnames(llvm_directx_libs DirectX)
 
         add_subdirectory(taichi/rhi/dx12)
         add_subdirectory(taichi/runtime/dx12)
         add_subdirectory(taichi/codegen/dx12)
+        add_subdirectory(taichi/runtime/program_impls/dx12)
 
+        target_include_directories(${CORE_LIBRARY_NAME} PRIVATE external/DirectX-Headers/include)
         target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE dx12_codegen)
         target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE dx12_runtime)
+        target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE dx12_program_impl)
     endif()
 
     add_subdirectory(taichi/rhi/llvm)
@@ -280,12 +295,7 @@ if (TI_WITH_METAL)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_WITH_METAL")
 
     add_subdirectory(taichi/rhi/metal)
-    add_subdirectory(taichi/runtime/metal)
     add_subdirectory(taichi/runtime/program_impls/metal)
-    add_subdirectory(taichi/codegen/metal)
-
-    target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE metal_codegen)
-    target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE metal_runtime)
     target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE metal_program_impl)
 endif()
 
@@ -314,21 +324,33 @@ add_subdirectory(taichi/codegen/spirv)
 add_subdirectory(taichi/cache/gfx)
 add_subdirectory(taichi/runtime/gfx)
 
-if (TI_WITH_OPENGL OR TI_WITH_VULKAN OR TI_WITH_DX11)
+if (TI_WITH_OPENGL OR TI_WITH_VULKAN OR TI_WITH_DX11 OR TI_WITH_METAL)
   target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE spirv_codegen)
   target_link_libraries(${CORE_LIBRARY_NAME} PRIVATE gfx_runtime)
+endif()
+
+if (TI_WITH_OPENGL OR TI_WITH_DX11 OR TI_WITH_METAL)
+  set(SPIRV_CROSS_CLI false)
+  add_subdirectory(${PROJECT_SOURCE_DIR}/external/SPIRV-Cross ${PROJECT_BINARY_DIR}/external/SPIRV-Cross)
 endif()
 
 # Vulkan Device API
 if (TI_WITH_VULKAN)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTI_WITH_VULKAN")
     if (APPLE)
-        find_library(MOLTEN_VK libMoltenVK.dylib PATHS $HOMEBREW_CELLAR/molten-vk $VULKAN_SDK REQUIRED)
-        configure_file(${MOLTEN_VK} ${CMAKE_BINARY_DIR}/libMoltenVK.dylib COPYONLY)
-        message(STATUS "MoltenVK library ${MOLTEN_VK}")
-        if (EXISTS ${CMAKE_BINARY_DIR}/libMoltenVK.dylib)
-            install(FILES ${CMAKE_BINARY_DIR}/libMoltenVK.dylib DESTINATION ${INSTALL_LIB_DIR}/runtime)
+        # The latest Molten-vk v1.2.0 and v1.1.11 breaks GGUI: mpm3d_ggui.py
+        # So we have to manually download and install Molten-vk v1.10.0
+        #
+        # Uncomment the following lines if the mpm3d_ggui.py runs well with the latest Molten-vk
+        #find_library(MOLTEN_VK libMoltenVK.dylib PATHS $HOMEBREW_CELLAR/molten-vk $VULKAN_SDK REQUIRED)
+        #configure_file(${MOLTEN_VK} ${CMAKE_BINARY_DIR}/libMoltenVK.dylib COPYONLY)
+        #message(STATUS "MoltenVK library ${MOLTEN_VK}")
+
+        if(NOT EXISTS ${CMAKE_BINARY_DIR}/libMoltenVK.dylib)
+            execute_process(COMMAND curl -L -o ${CMAKE_BINARY_DIR}/libMoltenVK.zip https://github.com/taichi-dev/taichi_assets/files/9977436/libMoltenVK.dylib.zip)
+            execute_process(COMMAND tar -xf ${CMAKE_BINARY_DIR}/libMoltenVK.zip --directory ${CMAKE_BINARY_DIR})
         endif()
+        install(FILES ${CMAKE_BINARY_DIR}/libMoltenVK.dylib DESTINATION ${INSTALL_LIB_DIR}/runtime)
     endif()
     add_subdirectory(taichi/rhi/vulkan)
     add_subdirectory(taichi/runtime/program_impls/vulkan)
@@ -405,8 +427,6 @@ target_link_libraries(taichi_ui PUBLIC ${CORE_LIBRARY_NAME})
 if(TI_WITH_PYTHON)
     message("PYTHON_LIBRARIES: " ${PYTHON_LIBRARIES})
     set(CORE_WITH_PYBIND_LIBRARY_NAME taichi_python)
-    # Cannot compile Python source code with Android, but TI_EXPORT_CORE should be set and
-    # Android should only use the isolated library ignoring those source code.
     if (NOT ANDROID)
         # NO_EXTRAS is required here to avoid llvm symbol error during build
         file(GLOB TAICHI_PYBIND_SOURCE
@@ -421,6 +441,13 @@ if(TI_WITH_PYTHON)
     # Remove symbols from static libs: https://stackoverflow.com/a/14863432/12003165
     if (LINUX)
         target_link_options(${CORE_WITH_PYBIND_LIBRARY_NAME} PUBLIC -Wl,--exclude-libs=ALL)
+    endif()
+
+    if (TI_WITH_BACKTRACE)
+        # Defined by external/backward-cpp:
+        # This will add libraries, definitions and include directories needed by backward
+        # by setting each property on the target.
+        target_link_libraries(${CORE_WITH_PYBIND_LIBRARY_NAME} PRIVATE ${BACKWARD_ENABLE})
     endif()
 
     if(TI_WITH_GGUI)
@@ -471,5 +498,11 @@ endif()
 
 if (NOT APPLE)
     install(FILES ${CMAKE_SOURCE_DIR}/external/cuda_libdevice/slim_libdevice.10.bc
+            DESTINATION ${INSTALL_LIB_DIR}/runtime)
+endif()
+
+if (TI_WITH_AMDGPU)
+    file(GLOB AMDGPU_BC_FILES ${CMAKE_SOURCE_DIR}/external/amdgpu_libdevice/*.bc)
+    install(FILES ${AMDGPU_BC_FILES}
             DESTINATION ${INSTALL_LIB_DIR}/runtime)
 endif()
